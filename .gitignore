@@ -18,3 +18,7 @@ __pycache__/
 *.pem
 *.pfx
 *.key
+
+# Generated local telemetry
+data/*.jsonl
+data/*.log
