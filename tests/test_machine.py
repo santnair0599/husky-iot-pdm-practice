@@ -117,3 +117,60 @@ def test_reject_unsupported_fault():
 
     with pytest.raises(ValueError):
         machine.inject_fault("engine_failure")
+
+
+
+def test_overheating_progression():
+    machine = InjectionMouldingMachine("IMM-001")
+    machine.inject_fault("overheating")
+
+    machine.advance_time(10)
+
+    assert machine.temperature_fault_offset == pytest.approx(15.0)
+
+
+def test_seal_leak_progression():
+    machine = InjectionMouldingMachine("IMM-001")
+    machine.inject_fault("seal_leak")
+
+    machine.advance_time(10)
+
+    assert machine.pressure_fault_offset == pytest.approx(20.0)
+
+
+def test_stuck_sensor():
+    machine = InjectionMouldingMachine("IMM-001")
+    machine.inject_fault("stuck_sensor")
+
+    reading1 = machine.generate_reading()
+    reading2 = machine.generate_reading()
+    reading3 = machine.generate_reading()
+
+    assert (
+        reading1["temperature_c"]
+        == reading2["temperature_c"]
+        == reading3["temperature_c"]
+    )
+
+
+def test_sudden_spike_occurs_once():
+    machine = InjectionMouldingMachine("IMM-001")
+    machine.inject_fault("spike")
+
+    reading1 = machine.generate_reading()
+    reading2 = machine.generate_reading()
+
+    assert reading1["vibration_mm_s"] >= 16.5
+    assert reading2["vibration_mm_s"] <= 3.5
+
+
+def test_fault_clear_resets_sensor_flags():
+    machine = InjectionMouldingMachine("IMM-001")
+
+    machine.inject_fault("stuck_sensor")
+    machine.generate_reading()
+    machine.clear_fault()
+
+    assert machine.active_fault is None
+    assert machine.stuck_temperature is None
+    assert machine.spike_pending is False

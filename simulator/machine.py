@@ -16,118 +16,156 @@ class InjectionMouldingMachine:
         self.bearing_wear = 0.0
         self.active_fault = None
         
+        self.temperature_fault_offset = 0.0
+        self.pressure_fault_offset = 0.0
+        self.stuck_temperature = None
+        self.spike_pending = False
+        
+    
     
     def inject_fault(self, fault_type: str):
-        """Activate a supported simulated machine fault."""
+        """Inject one supported machine fault."""
 
-        supported_faults = {"bearing_wear"}
+        supported_faults = {
+        "bearing_wear",
+        "overheating",
+        "seal_leak",
+        "stuck_sensor",
+        "spike"
+        }
 
         if fault_type not in supported_faults:
             raise ValueError(
-                f"Unsupported fault type: {fault_type}"
+            f"Unsupported fault type: {fault_type}"
             )
 
         self.active_fault = fault_type
 
+        if fault_type == "stuck_sensor":
+            self.stuck_temperature = None
+
+        if fault_type == "spike":
+            self.spike_pending = True
+
 
     def clear_fault(self):
-        """Stop accelerated deterioration."""
+        """Stop the active fault without repairing accumulated wear."""
 
         self.active_fault = None
+        self.stuck_temperature = None
+        self.spike_pending = False
+        
 
-
+    
     def advance_time(self, hours: float):
-        """Advance simulated machine operation."""
+        """Advance operating time and fault progression."""
 
         if hours <= 0:
             raise ValueError("Hours must be positive")
 
         self.running_hours += hours
 
-        normal_wear_rate = 0.02
-        faulty_wear_rate = 0.20
-
         if self.active_fault == "bearing_wear":
-            wear_rate = faulty_wear_rate
+            wear_rate = 0.20
         else:
-            wear_rate = normal_wear_rate
+            wear_rate = 0.02
 
         self.bearing_wear += wear_rate * hours
 
+        if self.active_fault == "overheating":
+            self.temperature_fault_offset += 1.5 * hours
+
+        if self.active_fault == "seal_leak":
+            self.pressure_fault_offset += 2.0 * hours
+
+
+    
     def generate_reading(self) -> dict:
-        """Generate telemetry using current machine state."""
+        """Generate telemetry based on machine condition."""
+
+        temperature = round(
+        random.uniform(70, 80)
+        + self.temperature_fault_offset,
+        2
+        )
+
+        vibration = round(
+        random.uniform(1.5, 3.5)
+        + self.bearing_wear,
+        2
+        )
+
+        pressure = round(
+        max(
+            0,
+            random.uniform(130, 150)
+            - self.pressure_fault_offset
+        ),
+        2
+        )
+
+        cycle_time = round(
+        random.uniform(20, 28), 2
+        )
+
+        # Simulate a stuck temperature sensor.
+        if self.active_fault == "stuck_sensor":
+            if self.stuck_temperature is None:
+                self.stuck_temperature = temperature
+
+            temperature = self.stuck_temperature
+
+        # One-shot vibration spike.
+        if self.spike_pending:
+            vibration = round(vibration + 15.0, 2)
+            self.spike_pending = False
+
+        if self.active_fault == "spike":
+            self.active_fault = None
 
         reading = {
-            "message_id": str(uuid.uuid4()),
-            "machine_id": self.machine_id,
-            "event_time": datetime.now(
-                timezone.utc
-            ).isoformat(),
-            "temperature_c": round(
-                random.uniform(70, 80), 2
-            ),
-            "vibration_mm_s": round(
-                random.uniform(1.5, 3.5)
-                + self.bearing_wear, 2
-            ),
-            "pressure_bar": round(
-                random.uniform(130, 150), 2
-            ),
-            "cycle_time_s": round(
-                random.uniform(20, 28), 2
-            ),
-            "running_hours": round(
-                self.running_hours, 2
-            ),
-            "bearing_wear": round(
-                self.bearing_wear, 4
-            ),
-            "active_fault": self.active_fault,
-            "status": "RUNNING"
+        "message_id": str(uuid.uuid4()),
+        "machine_id": self.machine_id,
+        "event_time": datetime.now(
+            timezone.utc
+        ).isoformat(),
+        "temperature_c": temperature,
+        "vibration_mm_s": vibration,
+        "pressure_bar": pressure,
+        "cycle_time_s": cycle_time,
+        "running_hours": round(self.running_hours, 2),
+        "bearing_wear": round(self.bearing_wear, 4),
+        "active_fault": self.active_fault,
+        "status": "RUNNING"
         }
 
         return reading
 
 
+
 if __name__ == "__main__":
 
-    machine = InjectionMouldingMachine("IMM-001")
+    for fault in [
+        "bearing_wear",
+        "overheating",
+        "seal_leak",
+        "stuck_sensor",
+        "spike"
+    ]:
+        machine = InjectionMouldingMachine("IMM-001")
 
-    print("=== NORMAL OPERATION ===")
+        machine.inject_fault(fault)
 
-    for _ in range(3):
-        machine.advance_time(5)
-        reading = machine.generate_reading()
+        print(f"\n=== {fault.upper()} ===")
 
-        print(
-            f"Hours={reading['running_hours']}, "
-            f"Wear={reading['bearing_wear']}, "
-            f"Vibration={reading['vibration_mm_s']}"
-        )
+        for i in range(5):
+            machine.advance_time(2)
 
-    print("\n=== BEARING FAULT INJECTED ===")
+            reading = machine.generate_reading()
 
-    machine.inject_fault("bearing_wear")
-
-    for _ in range(3):
-        machine.advance_time(5)
-        reading = machine.generate_reading()
-
-        print(
-            f"Hours={reading['running_hours']}, "
-            f"Wear={reading['bearing_wear']}, "
-            f"Vibration={reading['vibration_mm_s']}"
-        )
-
-    print("\n=== FAULT CLEARED ===")
-
-    machine.clear_fault()
-    machine.advance_time(5)
-
-    reading = machine.generate_reading()
-
-    print(
-        f"Hours={reading['running_hours']}, "
-        f"Wear={reading['bearing_wear']}, "
-        f"Vibration={reading['vibration_mm_s']}"
-    )
+            print(
+                f"Hour={reading['running_hours']}, "
+                f"Temp={reading['temperature_c']}, "
+                f"Vib={reading['vibration_mm_s']}, "
+                f"Pressure={reading['pressure_bar']}"
+            )
