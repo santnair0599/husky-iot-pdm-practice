@@ -14,17 +14,45 @@ class InjectionMouldingMachine:
         # State retained between readings
         self.running_hours = 0.0
         self.bearing_wear = 0.0
+        self.active_fault = None
+        
+    
+    def inject_fault(self, fault_type: str):
+        """Activate a supported simulated machine fault."""
+
+        supported_faults = {"bearing_wear"}
+
+        if fault_type not in supported_faults:
+            raise ValueError(
+                f"Unsupported fault type: {fault_type}"
+            )
+
+        self.active_fault = fault_type
+
+
+    def clear_fault(self):
+        """Stop accelerated deterioration."""
+
+        self.active_fault = None
+
 
     def advance_time(self, hours: float):
-        """Simulate machine operation over time."""
+        """Advance simulated machine operation."""
 
         if hours <= 0:
             raise ValueError("Hours must be positive")
 
         self.running_hours += hours
 
-        # Synthetic wear rate per operating hour
-        self.bearing_wear += 0.02 * hours
+        normal_wear_rate = 0.02
+        faulty_wear_rate = 0.20
+
+        if self.active_fault == "bearing_wear":
+            wear_rate = faulty_wear_rate
+        else:
+            wear_rate = normal_wear_rate
+
+        self.bearing_wear += wear_rate * hours
 
     def generate_reading(self) -> dict:
         """Generate telemetry using current machine state."""
@@ -54,6 +82,7 @@ class InjectionMouldingMachine:
             "bearing_wear": round(
                 self.bearing_wear, 4
             ),
+            "active_fault": self.active_fault,
             "status": "RUNNING"
         }
 
@@ -64,14 +93,41 @@ if __name__ == "__main__":
 
     machine = InjectionMouldingMachine("IMM-001")
 
-    for i in range(6):
+    print("=== NORMAL OPERATION ===")
 
-        machine.advance_time(10)
-
+    for _ in range(3):
+        machine.advance_time(5)
         reading = machine.generate_reading()
 
         print(
-            f"Hours: {reading['running_hours']}, "
-            f"Wear: {reading['bearing_wear']}, "
-            f"Vibration: {reading['vibration_mm_s']} mm/s"
+            f"Hours={reading['running_hours']}, "
+            f"Wear={reading['bearing_wear']}, "
+            f"Vibration={reading['vibration_mm_s']}"
         )
+
+    print("\n=== BEARING FAULT INJECTED ===")
+
+    machine.inject_fault("bearing_wear")
+
+    for _ in range(3):
+        machine.advance_time(5)
+        reading = machine.generate_reading()
+
+        print(
+            f"Hours={reading['running_hours']}, "
+            f"Wear={reading['bearing_wear']}, "
+            f"Vibration={reading['vibration_mm_s']}"
+        )
+
+    print("\n=== FAULT CLEARED ===")
+
+    machine.clear_fault()
+    machine.advance_time(5)
+
+    reading = machine.generate_reading()
+
+    print(
+        f"Hours={reading['running_hours']}, "
+        f"Wear={reading['bearing_wear']}, "
+        f"Vibration={reading['vibration_mm_s']}"
+    )

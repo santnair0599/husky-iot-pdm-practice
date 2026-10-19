@@ -65,3 +65,55 @@ def test_reject_invalid_time():
     with pytest.raises(ValueError):
         machine.advance_time(-5)
 
+
+def test_inject_bearing_fault():
+    machine = InjectionMouldingMachine("IMM-001")
+
+    machine.inject_fault("bearing_wear")
+
+    assert machine.active_fault == "bearing_wear"
+
+
+def test_fault_accelerates_wear():
+    normal_machine = InjectionMouldingMachine("IMM-001")
+    faulty_machine = InjectionMouldingMachine("IMM-002")
+
+    faulty_machine.inject_fault("bearing_wear")
+
+    normal_machine.advance_time(10)
+    faulty_machine.advance_time(10)
+
+    assert (
+        faulty_machine.bearing_wear
+        > normal_machine.bearing_wear
+    )
+
+    assert faulty_machine.bearing_wear == pytest.approx(2.0)
+    assert normal_machine.bearing_wear == pytest.approx(0.2)
+
+
+def test_clear_fault():
+    machine = InjectionMouldingMachine("IMM-001")
+
+    machine.inject_fault("bearing_wear")
+    machine.advance_time(5)
+
+    wear_before_clear = machine.bearing_wear
+
+    machine.clear_fault()
+
+    assert machine.active_fault is None
+    assert machine.bearing_wear == wear_before_clear
+
+    machine.advance_time(5)
+
+    assert machine.bearing_wear == pytest.approx(
+        wear_before_clear + 0.1
+    )
+
+
+def test_reject_unsupported_fault():
+    machine = InjectionMouldingMachine("IMM-001")
+
+    with pytest.raises(ValueError):
+        machine.inject_fault("engine_failure")
