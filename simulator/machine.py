@@ -124,6 +124,7 @@ class InjectionMouldingMachine:
             self.active_fault = None
 
         reading = {
+        "schema_version": "1.0",
         "message_id": str(uuid.uuid4()),
         "machine_id": self.machine_id,
         "event_time": datetime.now(
@@ -134,8 +135,6 @@ class InjectionMouldingMachine:
         "pressure_bar": pressure,
         "cycle_time_s": cycle_time,
         "running_hours": round(self.running_hours, 2),
-        "bearing_wear": round(self.bearing_wear, 4),
-        "active_fault": self.active_fault,
         "status": "RUNNING"
         }
 

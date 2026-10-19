@@ -1,0 +1,67 @@
+
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/husky/telemetry/v1",
+  "title": "Industrial Machine Telemetry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "message_id",
+    "machine_id",
+    "event_time",
+    "temperature_c",
+    "vibration_mm_s",
+    "pressure_bar",
+    "cycle_time_s",
+    "running_hours",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "message_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "machine_id": {
+      "type": "string",
+      "pattern": "^IMM-[0-9]{3}$"
+    },
+    "event_time": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "(Z|\\+00:00)$"
+    },
+    "temperature_c": {
+      "type": "number",
+      "minimum": -20,
+      "maximum": 250
+    },
+    "vibration_mm_s": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "pressure_bar": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 500
+    },
+    "cycle_time_s": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "maximum": 300
+    },
+    "running_hours": {
+      "type": "number",
+      "minimum": 0
+    },
+    "status": {
+      "type": "string",
+      "enum": ["RUNNING", "IDLE", "STOPPED"]
+    }
+  }
+}
