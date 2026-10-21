@@ -1,0 +1,21 @@
+
+.create-merge table Telemetry_Raw (
+    Payload: dynamic,
+    IoTHubDeviceId: string
+)
+
+.create-or-alter table Telemetry_Raw ingestion json mapping "TelemetryRawMapping"
+```[
+  {
+    "column": "Payload",
+    "Properties": {
+      "Path": "$"
+    }
+  },
+  {
+    "column": "IoTHubDeviceId",
+    "Properties": {
+      "Path": "$.iothub-connection-device-id"
+    }
+  }
+]```

@@ -1,0 +1,85 @@
+
+resource "azurerm_kusto_cluster" "pdm" {
+  name                = var.adx_cluster_name
+  location            = azurerm_resource_group.pdm.location
+  resource_group_name = azurerm_resource_group.pdm.name
+
+  sku {
+    name     = "Dev(No SLA)_Standard_E2a_v4"
+    capacity = 1
+  }
+
+  tags = {
+    project     = "husky-iot-pdm"
+    environment = var.environment
+    managed_by  = "terraform"
+  }
+}
+
+resource "azurerm_kusto_database" "pdm" {
+  name                = "pdm_dev"
+  resource_group_name = azurerm_resource_group.pdm.name
+  location            = azurerm_resource_group.pdm.location
+  cluster_name        = azurerm_kusto_cluster.pdm.name
+
+  hot_cache_period   = "P1D"
+  soft_delete_period = "P7D"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "azurerm_iothub_consumer_group" "adx" {
+  name                   = "adx-dev"
+  resource_group_name    = azurerm_resource_group.pdm.name
+  iothub_name            = azurerm_iothub.pdm.name
+  eventhub_endpoint_name = "events"
+}
+
+
+resource "azurerm_iothub_shared_access_policy" "adx_reader" {
+  name                = "adx-reader"
+  resource_group_name = azurerm_resource_group.pdm.name
+  iothub_name         = azurerm_iothub.pdm.name
+
+  registry_read   = true
+  service_connect = true
+}
+
+resource "azurerm_kusto_script" "raw_ingestion" {
+  name        = "deploy-raw-ingestion"
+  database_id = azurerm_kusto_database.pdm.id
+
+  script_content = file(
+    "${path.module}/../../../../kql/01_raw_ingestion.kql"
+  )
+
+  continue_on_errors_enabled = false
+}
+
+
+resource "azurerm_kusto_iothub_data_connection" "telemetry" {
+  name                = "iot-telemetry-dev"
+  resource_group_name = azurerm_resource_group.pdm.name
+  location            = azurerm_resource_group.pdm.location
+
+  cluster_name  = azurerm_kusto_cluster.pdm.name
+  database_name = azurerm_kusto_database.pdm.name
+
+  iothub_id                 = azurerm_iothub.pdm.id
+  consumer_group            = azurerm_iothub_consumer_group.adx.name
+  shared_access_policy_name = azurerm_iothub_shared_access_policy.adx_reader.name
+
+  table_name        = "Telemetry_Raw"
+  mapping_rule_name = "TelemetryRawMapping"
+  data_format       = "JSON"
+
+  event_system_properties = [
+    "iothub-connection-device-id"
+  ]
+
+  depends_on = [
+    azurerm_kusto_script.raw_ingestion
+  ]
+}
