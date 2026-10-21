@@ -1,0 +1,55 @@
+
+.create-or-alter function with (folder = "PredictiveMaintenance")
+VibrationForecast()
+{
+    let StartTime = bin(now() - 2h, 5m);
+    let EndTime = bin(now(), 5m) + 5m;
+    let Latest =
+        TelemetryDeduplicated()
+        | where EventTime between (StartTime .. EndTime)
+        | summarize arg_max(EventTime, VibrationMmS)
+            by MachineId
+        | project
+            MachineId,
+            LastEventTime = EventTime,
+            CurrentVibration = VibrationMmS;
+    TelemetryDeduplicated()
+    | where EventTime between (StartTime .. EndTime)
+    | summarize
+        AvgVibration = avg(VibrationMmS)
+        by MachineId, TimeBucket = bin(EventTime, 5m)
+    | make-series
+        VibrationSeries = avg(AvgVibration)
+            default = double(null)
+        on TimeBucket
+        from StartTime to EndTime step 5m
+        by MachineId
+    | mv-apply Bin = VibrationSeries to typeof(real) on (
+        summarize ObservedBins = countif(isnotnull(Bin))
+      )
+    | where ObservedBins >= 6
+    | extend
+        FilledSeries = series_fill_linear(
+            VibrationSeries
+        )
+    | extend
+        (RSquare, SlopePerBucket, Variance,
+         ResidualVariance, Intercept, FittedLine)
+        = series_fit_line(FilledSeries)
+    | join kind=inner Latest on MachineId
+    | extend
+        SlopePerHour = SlopePerBucket * 12.0
+    | extend HoursToThreshold = case(
+        CurrentVibration >= 8.0, 0.0,
+        SlopePerHour <= 0.0, real(null),
+        RSquare < 0.70, real(null),
+        (8.0 - CurrentVibration) / SlopePerHour
+    )
+    | project
+        MachineId,
+        LastEventTime,
+        CurrentVibration,
+        SlopePerHour,
+        RSquare,
+        HoursToThreshold
+}

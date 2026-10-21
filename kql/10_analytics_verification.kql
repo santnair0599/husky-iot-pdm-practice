@@ -1,0 +1,25 @@
+
+// Latest machine health
+DeviceHealth()
+| order by HealthScore asc
+
+
+
+// Latest machine health
+DeviceHealth()
+| order by HealthScore asc
+
+
+
+// Detect machine anomalies
+VibrationAnomalies()
+| summarize EventCount = count()
+    by MachineId, AnomalyType
+| order by EventCount desc
+
+
+
+// Maintenance priority distribution
+MaintenanceAlerts()
+| summarize Machines = count() by Priority
+| order by Priority asc

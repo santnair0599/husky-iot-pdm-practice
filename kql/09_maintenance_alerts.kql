@@ -1,0 +1,54 @@
+.create-or-alter function with (folder = "PredictiveMaintenance")
+MaintenanceAlerts()
+{
+    DeviceHealth()
+    | join kind=leftouter (
+        VibrationForecast()
+        | project MachineId, HoursToThreshold,
+            RSquare
+    ) on MachineId
+    | extend Priority = case(
+        VibrationMmS >= 8.0
+            or TemperatureC >= 100.0
+            or PressureBar < 110.0,
+            "P1_CRITICAL",
+        HealthScore < 50.0
+            or (
+                isnotnull(HoursToThreshold)
+                and HoursToThreshold <= 4.0
+            ),
+            "P1_CRITICAL",
+        HealthScore < 75.0
+            or (
+                isnotnull(HoursToThreshold)
+                and HoursToThreshold <= 24.0
+            ),
+            "P2_HIGH",
+        "P3_MONITOR"
+    )
+    | extend RecommendedAction = case(
+        Priority == "P1_CRITICAL",
+            "Urgent engineering inspection",
+        Priority == "P2_HIGH",
+            "Schedule maintenance inspection",
+        "Continue monitoring"
+    )
+    | extend PriorityRank = case(
+        Priority == "P1_CRITICAL", 1,
+        Priority == "P2_HIGH", 2,
+        3
+    )
+    | project
+        MachineId,
+        EventTime,
+        HealthScore,
+        HealthStatus,
+        VibrationMmS,
+        TemperatureC,
+        PressureBar,
+        HoursToThreshold,
+        Priority,
+        PriorityRank,
+        RecommendedAction
+    | order by PriorityRank asc, HealthScore asc
+}

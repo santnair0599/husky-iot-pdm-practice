@@ -127,3 +127,23 @@ resource "azurerm_kusto_script" "dq_policies" {
   ]
 }
 
+
+resource "azurerm_kusto_script" "predictive_analytics" {
+  name        = "deploy-predictive-analytics"
+  database_id = azurerm_kusto_database.pdm.id
+
+  script_content = join("\n\n", [
+    file("${path.module}/../../../../kql/06_device_health.kql"),
+    file("${path.module}/../../../../kql/07_vibration_anomalies.kql"),
+    file("${path.module}/../../../../kql/08_vibration_forecast.kql"),
+    file("${path.module}/../../../../kql/09_maintenance_alerts.kql")
+  ])
+
+  continue_on_errors_enabled = false
+
+  depends_on = [
+    azurerm_kusto_script.dq_functions,
+    azurerm_kusto_script.dq_policies
+  ]
+}
+

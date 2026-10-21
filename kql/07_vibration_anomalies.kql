@@ -1,0 +1,45 @@
+
+.create-or-alter function with (folder = "PredictiveMaintenance")
+VibrationAnomalies()
+{
+    TelemetryDeduplicated()
+    | where EventTime >= ago(24h)
+    | partition hint.strategy=native by MachineId (
+        sort by EventTime asc, MessageId asc
+        | serialize
+        | extend
+            PrevMachine = prev(MachineId),
+            PrevVibration = prev(VibrationMmS),
+            PrevTemperature = prev(TemperatureC)
+        | extend VibrationJump = iff(
+            PrevMachine == MachineId,
+            VibrationMmS - PrevVibration,
+            real(null)
+        )
+        | extend TemperatureRepeated = 
+            PrevMachine == MachineId
+            and TemperatureC == PrevTemperature
+    )
+    | extend AnomalyType = case(
+        VibrationMmS >= 8.0,
+            "CRITICAL_VIBRATION",
+        isnotnull(VibrationJump)
+            and VibrationJump >= 5.0,
+            "SUDDEN_VIBRATION_SPIKE",
+        TemperatureC >= 100.0,
+            "OVERHEATING",
+        PressureBar < 110.0,
+            "CRITICAL_PRESSURE_DROP",
+        "NONE"
+    )
+    | where AnomalyType != "NONE"
+    | project
+        MachineId,
+        EventTime,
+        MessageId,
+        VibrationMmS,
+        VibrationJump,
+        TemperatureC,
+        PressureBar,
+        AnomalyType
+}

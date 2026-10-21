@@ -1,0 +1,45 @@
+
+.create-or-alter function with (folder = "PredictiveMaintenance")
+DeviceHealth()
+{
+    TelemetryDeduplicated()
+    | where EventTime >= ago(24h)
+    | summarize arg_max(EventTime, *)
+        by MachineId
+    | extend
+        VibrationPenalty = case(
+            VibrationMmS >= 8.0, 100.0,
+            VibrationMmS >= 4.5, 50.0,
+            0.0
+        ),
+        TemperaturePenalty = case(
+            TemperatureC >= 100.0, 100.0,
+            TemperatureC >= 85.0, 50.0,
+            0.0
+        ),
+        PressurePenalty = case(
+            PressureBar < 110.0, 100.0,
+            PressureBar < 125.0, 50.0,
+            0.0
+        )
+    | extend HealthScore =
+        100.0 -
+        (
+            0.40 * VibrationPenalty +
+            0.35 * TemperaturePenalty +
+            0.25 * PressurePenalty
+        )
+    | extend HealthStatus = case(
+        HealthScore < 50, "CRITICAL",
+        HealthScore < 75, "WARNING",
+        "HEALTHY"
+    )
+    | project
+        MachineId,
+        EventTime,
+        TemperatureC,
+        VibrationMmS,
+        PressureBar,
+        HealthScore,
+        HealthStatus
+}
