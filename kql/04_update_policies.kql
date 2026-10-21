@@ -1,0 +1,24 @@
+
+.alter table Telemetry policy update
+```[
+  {
+    "IsEnabled": true,
+    "Source": "Telemetry_Raw",
+    "Query": "SilverRows()",
+    "IsTransactional": false,
+    "PropagateIngestionProperties": false
+  }
+]```
+
+
+.alter table Telemetry_Quarantine policy update
+```[
+  {
+    "IsEnabled": true,
+    "Source": "Telemetry_Raw",
+    "Query": "QuarantineRows()",
+    "IsTransactional": false,
+    "PropagateIngestionProperties": false
+  }
+]```
+

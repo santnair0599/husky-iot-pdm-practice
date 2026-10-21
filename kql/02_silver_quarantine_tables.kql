@@ -1,0 +1,19 @@
+
+.create-merge table Telemetry (
+    MessageId: string,
+    MachineId: string,
+    EventTime: datetime,
+    TemperatureC: real,
+    VibrationMmS: real,
+    PressureBar: real,
+    CycleTimeS: real,
+    RunningHours: real,
+    Status: string,
+    IoTHubDeviceId: string
+)
+
+.create-merge table Telemetry_Quarantine (
+    Payload: dynamic,
+    IoTHubDeviceId: string,
+    RejectReason: string
+)

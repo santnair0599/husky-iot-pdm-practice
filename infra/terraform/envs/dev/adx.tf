@@ -83,3 +83,47 @@ resource "azurerm_kusto_iothub_data_connection" "telemetry" {
     azurerm_kusto_script.raw_ingestion
   ]
 }
+
+
+resource "azurerm_kusto_script" "dq_tables" {
+  name        = "deploy-dq-tables"
+  database_id = azurerm_kusto_database.pdm.id
+
+  script_content = file(
+    "${path.module}/../../../../kql/02_silver_quarantine_tables.kql"
+  )
+
+  continue_on_errors_enabled = false
+}
+
+resource "azurerm_kusto_script" "dq_functions" {
+  name        = "deploy-dq-functions"
+  database_id = azurerm_kusto_database.pdm.id
+
+  script_content = file(
+    "${path.module}/../../../../kql/03_validation_functions.kql"
+  )
+
+  continue_on_errors_enabled = false
+
+  depends_on = [
+    azurerm_kusto_script.raw_ingestion,
+    azurerm_kusto_script.dq_tables
+  ]
+}
+
+resource "azurerm_kusto_script" "dq_policies" {
+  name        = "deploy-dq-policies"
+  database_id = azurerm_kusto_database.pdm.id
+
+  script_content = file(
+    "${path.module}/../../../../kql/04_update_policies.kql"
+  )
+
+  continue_on_errors_enabled = false
+
+  depends_on = [
+    azurerm_kusto_script.dq_functions
+  ]
+}
+

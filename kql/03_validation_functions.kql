@@ -1,0 +1,125 @@
+
+.create-or-alter function with (folder = "DataQuality")
+ValidateTelemetryRows()
+{
+    Telemetry_Raw
+    | extend
+        SchemaVersion = tostring(Payload.schema_version),
+        MessageId = tostring(Payload.message_id),
+        MachineId = tostring(Payload.machine_id),
+        EventTimeText = tostring(Payload.event_time),
+        TemperatureC = todouble(Payload.temperature_c),
+        VibrationMmS = todouble(Payload.vibration_mm_s),
+        PressureBar = todouble(Payload.pressure_bar),
+        CycleTimeS = todouble(Payload.cycle_time_s),
+        RunningHours = todouble(Payload.running_hours),
+        Status = tostring(Payload.status)
+    | extend
+        EventTime = todatetime(EventTimeText)
+    | extend
+        RejectReason = case(
+            SchemaVersion != "1.0",
+                "INVALID_SCHEMA_VERSION",
+            not(MessageId matches regex
+                "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"),
+                "INVALID_MESSAGE_ID",
+            not(MachineId matches regex "^IMM-[0-9]{3}$"),
+                "INVALID_MACHINE_ID",
+            isempty(IoTHubDeviceId),
+                "MISSING_AUTHENTICATED_DEVICE_ID",
+            MachineId != IoTHubDeviceId,
+                "DEVICE_ID_MISMATCH",
+            isnull(EventTime)
+                or not(
+                    EventTimeText endswith "Z"
+                    or EventTimeText endswith "+00:00"
+                ),
+                "INVALID_EVENT_TIME",
+            gettype(Payload.temperature_c)
+                !in ("real", "double", "long", "int")
+                or isnull(TemperatureC)
+                or TemperatureC < -20
+                or TemperatureC > 250,
+                "INVALID_TEMPERATURE",
+            gettype(Payload.vibration_mm_s)
+                !in ("real", "double", "long", "int")
+                or isnull(VibrationMmS)
+                or VibrationMmS < 0
+                or VibrationMmS > 100,
+                "INVALID_VIBRATION",
+            gettype(Payload.pressure_bar)
+                !in ("real", "double", "long", "int")
+                or isnull(PressureBar)
+                or PressureBar < 0
+                or PressureBar > 500,
+                "INVALID_PRESSURE",
+            gettype(Payload.cycle_time_s)
+                !in ("real", "double", "long", "int")
+                or isnull(CycleTimeS)
+                or CycleTimeS <= 0
+                or CycleTimeS > 300,
+                "INVALID_CYCLE_TIME",
+            gettype(Payload.running_hours)
+                !in ("real", "double", "long", "int")
+                or isnull(RunningHours)
+                or RunningHours < 0,
+                "INVALID_RUNNING_HOURS",
+            Status !in ("RUNNING", "IDLE", "STOPPED"),
+                "INVALID_STATUS",
+            ""
+        )
+}
+
+
+.create-or-alter function with (folder = "DataQuality")
+SilverRows()
+{
+    ValidateTelemetryRows()
+    | where isempty(RejectReason)
+    | project
+        MessageId,
+        MachineId,
+        EventTime,
+        TemperatureC,
+        VibrationMmS,
+        PressureBar,
+        CycleTimeS,
+        RunningHours,
+        Status,
+        IoTHubDeviceId
+}
+
+
+
+.create-or-alter function with (folder = "DataQuality")
+QuarantineRows()
+{
+    ValidateTelemetryRows()
+    | where isnotempty(RejectReason)
+    | project
+        Payload,
+        IoTHubDeviceId,
+        RejectReason
+}
+
+
+
+.create-or-alter function with (folder = "DataQuality")
+TelemetryDeduplicated()
+{
+    Telemetry
+    | summarize arg_max(EventTime, *)
+        by MessageId
+    | project
+        MessageId,
+        MachineId,
+        EventTime,
+        TemperatureC,
+        VibrationMmS,
+        PressureBar,
+        CycleTimeS,
+        RunningHours,
+        Status,
+        IoTHubDeviceId
+}
+

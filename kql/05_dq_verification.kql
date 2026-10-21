@@ -1,0 +1,4 @@
+Telemetry_Quarantine
+| summarize RejectedCount = count()
+    by RejectReason
+| order by RejectedCount desc
