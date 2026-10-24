@@ -14,6 +14,11 @@ resource "azurerm_kusto_cluster" "pdm" {
     environment = var.environment
     managed_by  = "terraform"
   }
+
+  identity {
+    type = "SystemAssigned"
+  }
+
 }
 
 resource "azurerm_kusto_database" "pdm" {
@@ -145,5 +150,15 @@ resource "azurerm_kusto_script" "predictive_analytics" {
     azurerm_kusto_script.dq_functions,
     azurerm_kusto_script.dq_policies
   ]
+}
+
+resource "azurerm_kusto_cluster_principal_assignment" "admin" {
+  name                = "adx-admin"
+  resource_group_name = azurerm_resource_group.pdm.name
+  cluster_name        = azurerm_kusto_cluster.pdm.name
+  tenant_id           = "874dd38d-b50f-40f3-9c7d-8c1342244a1d"
+  principal_id        = var.adx_admin_object_id
+  principal_type      = "User"
+  role                = "AllDatabasesAdmin"
 }
 

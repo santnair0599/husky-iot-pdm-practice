@@ -1,0 +1,17 @@
+.create-or-alter external table TelemetryParquet (
+    MessageId: string,
+    MachineId: string,
+    EventTime: datetime,
+    TemperatureC: real,
+    VibrationMmS: real,
+    PressureBar: real,
+    CycleTimeS: real,
+    RunningHours: real,
+    Status: string,
+    IoTHubDeviceId: string
+)
+kind=storage
+dataformat=parquet
+(
+    h@'https://sthuskypdmdev0599.blob.core.windows.net/curated/telemetry;impersonate'
+)

@@ -38,7 +38,8 @@ resource "azurerm_storage_container" "lake" {
   for_each = toset([
     "raw",
     "curated",
-    "quarantine"
+    "quarantine",
+    "synapse"
   ])
 
   name                  = each.key
@@ -65,6 +66,3 @@ resource "azurerm_iothub" "pdm" {
     managed_by  = "terraform"
   }
 }
-
-
-

@@ -1,0 +1,21 @@
+
+.create-or-alter continuous-export TelemetryHistoricalExport
+over (Telemetry)
+to table TelemetryParquet
+with (
+    intervalBetweenRuns = 15m,
+    managedIdentity = "system"
+)
+<|
+Telemetry
+| project
+    MessageId,
+    MachineId,
+    EventTime,
+    TemperatureC,
+    VibrationMmS,
+    PressureBar,
+    CycleTimeS,
+    RunningHours,
+    Status,
+    IoTHubDeviceId
