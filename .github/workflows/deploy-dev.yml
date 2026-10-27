@@ -1,27 +1,82 @@
-name: Deploy Dev
+
+name: Deploy Husky DEV
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
+
+concurrency:
+  group: husky-terraform-dev
+  cancel-in-progress: false
 
 jobs:
   deploy:
+    name: Terraform DEV
     runs-on: ubuntu-latest
     environment: dev
 
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+
+    defaults:
+      run:
+        working-directory: infra/terraform/envs/dev
+
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Login to Azure
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.11.4"
+
+      - name: Azure login using OIDC
         uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Verify Azure identity
-        run: az account show --query "{subscription:name, user:user.name, type:user.type}" -o table
+      - name: Verify Azure subscription
+        run: |
+          az account show \
+            --query "{name:name,id:id}" \
+            --output json
+
+      - name: Terraform Init
+        run: |
+          terraform init -reconfigure \
+            -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=tfstate-dev" \
+            -backend-config="key=husky-dev.tfstate"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -lock-timeout=5m \
+            -out=dev.tfplan \
+            -detailed-exitcode
+
+      - name: Apply only when there are no changes
+        run: |
+          terraform apply \
+            -auto-approve \
+            -input=false \
+            dev.tfplan
