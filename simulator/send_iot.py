@@ -37,6 +37,7 @@ def send_one_reading():
     reading = build_validated_reading(machine)
     
    
+
     payload = json.dumps(reading)
     message = Message(payload)
     message.content_type = "application/json"

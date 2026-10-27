@@ -49,3 +49,9 @@ variable "synapse_managed_resource_group_name" {
   description = "Managed RG Azure created for the workspace; must match or Terraform replaces the workspace"
   type        = string
 }
+
+variable "alert_email" {
+  description = "Dev alert recipient. Set TF_VAR_alert_email in your session; never commit it"
+  type        = string
+  sensitive   = true
+}
