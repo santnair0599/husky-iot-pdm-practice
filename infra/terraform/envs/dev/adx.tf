@@ -56,9 +56,10 @@ resource "azurerm_kusto_script" "raw_ingestion" {
   name        = "deploy-raw-ingestion"
   database_id = azurerm_kusto_database.pdm.id
 
-  script_content = file(
+  # Normalise CRLF (Windows checkout) to LF (CI checkout) so the content hash matches everywhere
+  script_content = replace(file(
     "${path.module}/../../../../kql/01_raw_ingestion.kql"
-  )
+  ), "\r\n", "\n")
 
   continue_on_errors_enabled = false
 }
@@ -94,9 +95,10 @@ resource "azurerm_kusto_script" "dq_tables" {
   name        = "deploy-dq-tables"
   database_id = azurerm_kusto_database.pdm.id
 
-  script_content = file(
+  # Normalise CRLF (Windows checkout) to LF (CI checkout) so the content hash matches everywhere
+  script_content = replace(file(
     "${path.module}/../../../../kql/02_silver_quarantine_tables.kql"
-  )
+  ), "\r\n", "\n")
 
   continue_on_errors_enabled = false
 }
@@ -105,9 +107,10 @@ resource "azurerm_kusto_script" "dq_functions" {
   name        = "deploy-dq-functions"
   database_id = azurerm_kusto_database.pdm.id
 
-  script_content = file(
+  # Normalise CRLF (Windows checkout) to LF (CI checkout) so the content hash matches everywhere
+  script_content = replace(file(
     "${path.module}/../../../../kql/03_validation_functions.kql"
-  )
+  ), "\r\n", "\n")
 
   continue_on_errors_enabled = false
 
@@ -121,9 +124,10 @@ resource "azurerm_kusto_script" "dq_policies" {
   name        = "deploy-dq-policies"
   database_id = azurerm_kusto_database.pdm.id
 
-  script_content = file(
+  # Normalise CRLF (Windows checkout) to LF (CI checkout) so the content hash matches everywhere
+  script_content = replace(file(
     "${path.module}/../../../../kql/04_update_policies.kql"
-  )
+  ), "\r\n", "\n")
 
   continue_on_errors_enabled = false
 
@@ -137,12 +141,13 @@ resource "azurerm_kusto_script" "predictive_analytics" {
   name        = "deploy-predictive-analytics"
   database_id = azurerm_kusto_database.pdm.id
 
-  script_content = join("\n\n", [
+  # Normalise CRLF (Windows checkout) to LF (CI checkout) so the content hash matches everywhere
+  script_content = replace(join("\n\n", [
     file("${path.module}/../../../../kql/06_device_health.kql"),
     file("${path.module}/../../../../kql/07_vibration_anomalies.kql"),
     file("${path.module}/../../../../kql/08_vibration_forecast.kql"),
     file("${path.module}/../../../../kql/09_maintenance_alerts.kql")
-  ])
+  ]), "\r\n", "\n")
 
   continue_on_errors_enabled = false
 
