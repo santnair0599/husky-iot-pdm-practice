@@ -1,0 +1,252 @@
+name: Husky DEV - Approved Terraform Deployment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Shared with deploy-dev.yml so the two can never touch Dev state at the same time
+concurrency:
+  group: husky-terraform-dev
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.15.5"
+
+jobs:
+  plan:
+    name: Terraform Plan DEV
+    runs-on: ubuntu-latest
+    environment: dev
+
+    permissions:
+      contents: read
+      id-token: write
+
+    outputs:
+      commit_sha: ${{ steps.meta.outputs.commit_sha }}
+
+    defaults:
+      run:
+        working-directory: infra/terraform/envs/dev
+
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_USE_CLI: "false"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+
+      # terraform.tfvars is git-ignored; CI reads the same values from the dev environment
+      TF_VAR_environment: ${{ vars.TF_ENVIRONMENT }}
+      TF_VAR_location: ${{ vars.TF_LOCATION }}
+      TF_VAR_resource_group_name: ${{ vars.TF_RESOURCE_GROUP_NAME }}
+      TF_VAR_storage_account_name: ${{ vars.TF_STORAGE_ACCOUNT_NAME }}
+      TF_VAR_iot_hub_name: ${{ vars.TF_IOT_HUB_NAME }}
+      TF_VAR_adx_cluster_name: ${{ vars.TF_ADX_CLUSTER_NAME }}
+      TF_VAR_adx_admin_object_id: ${{ vars.TF_ADX_ADMIN_OBJECT_ID }}
+      TF_VAR_synapse_workspace_name: ${{ vars.TF_SYNAPSE_WORKSPACE_NAME }}
+      TF_VAR_synapse_location: ${{ vars.TF_SYNAPSE_LOCATION }}
+      TF_VAR_synapse_managed_resource_group_name: ${{ vars.TF_SYNAPSE_MANAGED_RG_NAME }}
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Record source commit
+        id: meta
+        run: echo "commit_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Azure OIDC Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Check ADX cluster is running
+        run: |
+          state=$(az kusto cluster show \
+            --name "$TF_VAR_adx_cluster_name" \
+            --resource-group "$TF_VAR_resource_group_name" \
+            --query state -o tsv)
+          echo "ADX state: $state"
+          if [ "$state" != "Running" ]; then
+            echo "::error::ADX cluster is $state. Start it before running this workflow."
+            exit 1
+          fi
+
+      - name: Terraform Init
+        env:
+          STATE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+        run: |
+          terraform init -reconfigure \
+            -backend-config="storage_account_name=$STATE_ACCOUNT" \
+            -backend-config="container_name=tfstate-dev" \
+            -backend-config="key=husky-dev.tfstate"
+
+      - name: Terraform Validate
+        run: |
+          terraform fmt -check -recursive
+          terraform validate
+
+      - name: Generate saved plan
+        run: |
+          terraform plan \
+            -lock-timeout=5m \
+            -input=false \
+            -out=dev.tfplan
+
+      - name: Publish plan for the reviewer
+        run: |
+          {
+            echo "## Terraform plan for DEV (commit ${GITHUB_SHA::7})"
+            echo '```'
+            terraform show -no-color dev.tfplan | grep -E '^\s*[#~+-]|Plan:|No changes' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Review change actions (block delete and replace)
+        run: |
+          terraform show -json dev.tfplan > plan.json
+
+          echo "Planned actions:"
+          jq -r '
+            .resource_changes[]?
+            | select(.change.actions != ["no-op"])
+            | [.address, (.change.actions | join(","))]
+            | @tsv
+          ' plan.json
+
+          # A replacement is a delete + create, so this blocks both
+          if ! jq -e '
+            [ .resource_changes[]? | select(.change.actions | index("delete")) ]
+            | length == 0
+          ' plan.json > /dev/null; then
+            echo "::error::Plan contains delete or replace actions. Not allowed through this workflow."
+            rm plan.json
+            exit 1
+          fi
+
+          rm plan.json
+
+      - name: Create SHA-256 checksum
+        run: sha256sum dev.tfplan > dev.tfplan.sha256
+
+      - name: Upload saved plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            infra/terraform/envs/dev/dev.tfplan
+            infra/terraform/envs/dev/dev.tfplan.sha256
+          retention-days: 1
+          if-no-files-found: error
+
+  approval:
+    name: Review and Approve DEV
+    needs: plan
+    runs-on: ubuntu-latest
+    # Approval-only environment: holds the reviewer gate, receives no Azure credentials
+    environment: dev-approval
+
+    steps:
+      - name: Approval gate passed
+        run: echo "Deployment gate completed for commit ${{ needs.plan.outputs.commit_sha }}."
+
+  apply:
+    name: Apply Approved DEV Plan
+    needs: [plan, approval]
+    runs-on: ubuntu-latest
+    environment: dev
+
+    permissions:
+      contents: read
+      id-token: write
+
+    defaults:
+      run:
+        working-directory: infra/terraform/envs/dev
+
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_USE_CLI: "false"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+
+    steps:
+      - name: Checkout planned commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Azure OIDC Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Check ADX cluster is running
+        run: |
+          state=$(az kusto cluster show \
+            --name "${{ vars.TF_ADX_CLUSTER_NAME }}" \
+            --resource-group "${{ vars.TF_RESOURCE_GROUP_NAME }}" \
+            --query state -o tsv)
+          echo "ADX state: $state"
+          if [ "$state" != "Running" ]; then
+            echo "::error::ADX cluster is $state. Start it, then re-run this job."
+            exit 1
+          fi
+
+      - name: Terraform Init
+        env:
+          STATE_ACCOUNT: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+        run: |
+          terraform init -reconfigure \
+            -backend-config="storage_account_name=$STATE_ACCOUNT" \
+            -backend-config="container_name=tfstate-dev" \
+            -backend-config="key=husky-dev.tfstate"
+
+      - name: Download approved plan
+        uses: actions/download-artifact@v4
+        with:
+          name: dev-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: infra/terraform/envs/dev
+
+      - name: Verify saved plan integrity
+        run: sha256sum -c dev.tfplan.sha256
+
+      - name: Apply exact saved plan
+        run: |
+          terraform apply \
+            -lock-timeout=5m \
+            -input=false \
+            dev.tfplan
+
+      - name: Verify state
+        run: terraform state list
