@@ -4,9 +4,10 @@ resource "azurerm_resource_group" "pdm" {
   location = var.location
 
   tags = {
-    project     = "husky-iot-pdm"
-    environment = var.environment
-    managed_by  = "terraform"
+    project      = "husky-iot-pdm"
+    environment  = var.environment
+    managed_by   = "terraform"
+    release_test = "lesson18c"
   }
 }
 
