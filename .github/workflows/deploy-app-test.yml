@@ -1,0 +1,243 @@
+name: Husky TEST - Application Deployment
+
+# Same release as deploy-app-dev.yml, against Test. The "test" environment's
+# OIDC identity can only reach rg-husky-pdm-test, so it cannot touch Dev or Prod.
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "kql-only | kql-sql (KQL + Synapse views) | full (also end-to-end tests, needs 19C)"
+        type: choice
+        options: [kql-only, kql-sql, full]
+        default: kql-only
+
+permissions:
+  contents: read
+
+concurrency:
+  group: husky-app-test
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy and Verify TEST Application
+    runs-on: ubuntu-latest
+    environment: test
+    timeout-minutes: 60
+
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      ADX_CLUSTER_URI: ${{ vars.ADX_CLUSTER_URI }}
+      ADX_DATABASE: ${{ vars.ADX_DATABASE }}
+      SYNAPSE_SQL_SERVER: ${{ vars.SYNAPSE_SQL_SERVER }}
+      SYNAPSE_SQL_DATABASE: ${{ vars.SYNAPSE_SQL_DATABASE }}
+      ADLS_ACCOUNT_NAME: ${{ vars.ADLS_ACCOUNT_NAME }}
+      TEST_DEVICE_ID: ${{ vars.TEST_DEVICE_ID }}
+      RUN_INTEGRATION: "1"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Target guard (test only)
+        run: |
+          fail=0
+          [ "$ADX_DATABASE" = "pdm_test" ] || { echo "::error::ADX_DATABASE is '$ADX_DATABASE', expected pdm_test"; fail=1; }
+          for v in "$ADX_CLUSTER_URI" "$SYNAPSE_SQL_SERVER" "$ADLS_ACCOUNT_NAME"; do
+            case "$v" in *test*) ;; *) echo "::error::'$v' does not look like a Test endpoint"; fail=1 ;; esac
+          done
+          exit $fail
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            azure-identity \
+            azure-kusto-data \
+            azure-storage-blob \
+            azure-iot-device \
+            jsonschema \
+            pyodbc \
+            pytest
+
+      # ---------- CI validation: no Azure access needed ----------
+
+      - name: Unit tests
+        run: python -m pytest tests/ --ignore=tests/integration -q
+
+      - name: Render KQL and SQL (dry run)
+        run: |
+          python scripts/deploy_kql.py --dry-run > /dev/null
+          python scripts/deploy_synapse.py --dry-run
+
+      - name: Ensure ODBC Driver 18 for SQL Server
+        if: inputs.scope != 'kql-only'
+        run: |
+          if odbcinst -q -d -n "ODBC Driver 18 for SQL Server" > /dev/null 2>&1; then
+            echo "ODBC Driver 18 already installed"
+          else
+            curl -sSL -o packages-microsoft-prod.deb \
+              "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb"
+            sudo dpkg -i packages-microsoft-prod.deb
+            rm packages-microsoft-prod.deb
+            sudo apt-get update
+            sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+          fi
+          python -c "import pyodbc; d = pyodbc.drivers(); print(d); assert 'ODBC Driver 18 for SQL Server' in d"
+
+      # ---------- Deploy ----------
+
+      - name: Azure OIDC Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Check ADX cluster is running
+        run: |
+          state=$(az kusto cluster show \
+            --name "${{ vars.TF_ADX_CLUSTER_NAME }}" \
+            --resource-group "${{ vars.TF_RESOURCE_GROUP_NAME }}" \
+            --query state -o tsv)
+          echo "ADX state: $state"
+          if [ "$state" != "Running" ]; then
+            echo "::error::ADX cluster is $state. Start it before running this workflow."
+            exit 1
+          fi
+
+      # Test has no permanent Synapse firewall rule: allow only this runner's IP,
+      # only for this run. "Close Synapse firewall" removes it even on failure.
+      - name: Open Synapse firewall for this runner
+        if: inputs.scope != 'kql-only'
+        run: |
+          ip=$(curl -fsS https://api.ipify.org)
+          echo "Runner IP: $ip"
+          az synapse workspace firewall-rule create \
+            --name "gh-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --workspace-name "${{ vars.TF_SYNAPSE_WORKSPACE_NAME }}" \
+            --resource-group "${{ vars.TF_RESOURCE_GROUP_NAME }}" \
+            --start-ip-address "$ip" --end-ip-address "$ip" --output none
+          # Firewall changes can take a moment to apply; wait until we can connect
+          for i in $(seq 1 10); do
+            if python -c "from scripts.deploy_synapse import connect; import os; connect(os.environ['SYNAPSE_SQL_SERVER'], os.environ['SYNAPSE_SQL_DATABASE']).close()" 2>/dev/null; then
+              echo "Synapse reachable after $i attempt(s)"; exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::Synapse still unreachable from $ip after 5 minutes"; exit 1
+
+      - name: Deploy KQL
+        run: python scripts/deploy_kql.py
+      
+      - name: Re-run KQL deploy (must change nothing)
+        run: python scripts/deploy_kql.py
+
+      - name: Verify KQL objects
+        run: python -m pytest tests/integration/test_kql_deployed.py -v
+
+      - name: Deploy Synapse views
+        if: inputs.scope != 'kql-only'
+        run: python scripts/deploy_synapse.py
+
+      - name: Re-run Synapse deploy (must change nothing)
+        if: inputs.scope != 'kql-only'
+        run: python scripts/deploy_synapse.py
+
+      - name: Verify Synapse views
+        if: inputs.scope != 'kql-only'
+        run: python -m pytest tests/integration/test_synapse_deployed.py -v
+        
+
+      # ---------- Integration tests against the deployed Dev platform ----------
+
+      - name: Send test telemetry through IoT Hub
+        id: send
+        env:
+          IOTHUB_DEVICE_CONNECTION_STRING: ${{ secrets.IOTHUB_DEVICE_CONNECTION_STRING }}
+          IOTHUB_MACHINE_ID: ${{ vars.TEST_DEVICE_ID }}
+        if: inputs.scope == 'full'
+        run: |
+          python -m simulator.send_iot | tee send-output.txt
+
+          message_id=$(sed -n 's/^Message ID: *//p' send-output.txt | tail -1)
+          rm send-output.txt
+
+          if [ -z "$message_id" ]; then
+            echo "::error::Sender did not report a message ID"
+            exit 1
+          fi
+
+          echo "message_id=$message_id" >> "$GITHUB_OUTPUT"
+
+      - name: Validate smoke-test ID
+        env:
+          TEST_MESSAGE_ID: ${{ steps.send.outputs.message_id }}
+        if: inputs.scope == 'full'
+        run: python -c "import os, uuid; print(uuid.UUID(os.environ['TEST_MESSAGE_ID']))"
+
+      - name: Verify Bronze and Silver
+        env:
+          TEST_MESSAGE_ID: ${{ steps.send.outputs.message_id }}
+        if: inputs.scope == 'full'
+        run: python -m pytest tests/integration/test_adx_pipeline.py -v -s
+
+      - name: Verify quarantine
+        if: inputs.scope == 'full'
+        run: python -m pytest tests/integration/test_quarantine.py -v -s
+
+      - name: Verify raw archive
+        env:
+          TEST_MESSAGE_ID: ${{ steps.send.outputs.message_id }}
+        if: inputs.scope == 'full'
+        run: python -m pytest tests/integration/test_archive.py -v -s
+
+      # The export check can wait ~30 min; log in again so tokens are fresh
+      - name: Refresh Azure login
+        uses: azure/login@v2
+        if: inputs.scope == 'full'
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify Synapse historical export
+        env:
+          TEST_MESSAGE_ID: ${{ steps.send.outputs.message_id }}
+        if: inputs.scope == 'full'
+        run: python -m pytest tests/integration/test_synapse_reporting.py -v -s
+
+      - name: Close Synapse firewall
+        if: always() && inputs.scope != 'kql-only'
+        run: |
+          az synapse workspace firewall-rule delete \
+            --name "gh-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --workspace-name "${{ vars.TF_SYNAPSE_WORKSPACE_NAME }}" \
+            --resource-group "${{ vars.TF_RESOURCE_GROUP_NAME }}" \
+            --yes --output none || echo "::warning::Could not remove the temporary firewall rule; remove gh-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} by hand"
+          echo "Remaining firewall rules:"
+          az synapse workspace firewall-rule list \
+            --workspace-name "${{ vars.TF_SYNAPSE_WORKSPACE_NAME }}" \
+            --resource-group "${{ vars.TF_RESOURCE_GROUP_NAME }}" \
+            --query "[].name" -o tsv
+
+      - name: Release summary
+        if: always()
+        env:
+          TEST_MESSAGE_ID: ${{ steps.send.outputs.message_id }}
+        run: |
+          {
+            echo "## TEST application release (commit ${GITHUB_SHA::7})"
+            echo "- Test message ID: \`${TEST_MESSAGE_ID:-not sent}\`"
+            echo "- Result: **${{ job.status }}**"
+          } >> "$GITHUB_STEP_SUMMARY"

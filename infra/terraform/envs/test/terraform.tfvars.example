@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars (git-ignored) for local plans. CI reads the same
+# values from the GitHub "test" environment variables (TF_VAR_*).
+resource_group_name    = "rg-husky-pdm-test"
+location               = "eastus2"
+storage_account_name   = "sthuskypdmtest0599"
+iot_hub_name           = "iot-husky-pdm-test-0599"
+iot_hub_sku            = "B1"
+adx_cluster_name       = "adxhuskypdmtest0599"
+adx_database_name      = "pdm_test"
+create_data_connection = false
+synapse_workspace_name = "syn-husky-pdm-test-0599"
+synapse_location       = "centralus"
+# alert_email: set $env:TF_VAR_alert_email in your session, never here
