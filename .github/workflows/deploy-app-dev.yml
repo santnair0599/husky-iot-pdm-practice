@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: "What to release (full needs the 19B/19C setup)"
+        description: "kql-only | kql-sql (KQL + Synapse views) | full (also end-to-end tests, needs 19C)"
         type: choice
-        options: [kql-only, full]
+        options: [kql-only, kql-sql, full]
         default: kql-only
 
 permissions:
@@ -69,7 +69,7 @@ jobs:
           python scripts/deploy_synapse.py --dry-run
 
       - name: Ensure ODBC Driver 18 for SQL Server
-        if: inputs.scope == 'full'
+        if: inputs.scope != 'kql-only'
         run: |
           if odbcinst -q -d -n "ODBC Driver 18 for SQL Server" > /dev/null 2>&1; then
             echo "ODBC Driver 18 already installed"
@@ -114,8 +114,17 @@ jobs:
         run: python -m pytest tests/integration/test_kql_deployed.py -v
 
       - name: Deploy Synapse views
-        if: inputs.scope == 'full'
+        if: inputs.scope != 'kql-only'
         run: python scripts/deploy_synapse.py
+
+      - name: Re-run Synapse deploy (must change nothing)
+        if: inputs.scope != 'kql-only'
+        run: python scripts/deploy_synapse.py
+
+      - name: Verify Synapse views
+        if: inputs.scope != 'kql-only'
+        run: python -m pytest tests/integration/test_synapse_deployed.py -v
+        
 
       # ---------- Integration tests against the deployed Dev platform ----------
 
