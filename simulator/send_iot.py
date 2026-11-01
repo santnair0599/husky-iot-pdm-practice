@@ -30,7 +30,10 @@ def send_one_reading():
             "Missing IOTHUB_DEVICE_CONNECTION_STRING"
         )
         
-    machine = InjectionMouldingMachine("IMM-001")
+    # Must match the IoT Hub device the connection string belongs to
+    # (the release pipeline uses a dedicated test device, IMM-900)
+    machine_id = os.getenv("IOTHUB_MACHINE_ID", "IMM-001")
+    machine = InjectionMouldingMachine(machine_id)
     
     machine.advance_time(30 / 3600)
     

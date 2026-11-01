@@ -13,5 +13,5 @@
 kind=storage
 dataformat=parquet
 (
-    h@'https://sthuskypdmdev0599.blob.core.windows.net/curated/telemetry;impersonate'
+    h@'https://{{ADLS_ACCOUNT_NAME}}.blob.core.windows.net/curated/telemetry;impersonate'
 )

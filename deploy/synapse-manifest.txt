@@ -1,0 +1,4 @@
+# Synapse serverless SQL deployed by scripts/deploy_synapse.py, in this order.
+# 01_database.sql and 02_external_source.sql are one-time bootstrap (privileged,
+# master key) and are deliberately NOT listed here.
+05_deploy_views.sql

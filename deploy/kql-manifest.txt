@@ -1,0 +1,16 @@
+# Application KQL for the ADX database, deployed IN THIS ORDER by scripts/deploy_kql.py.
+# Tables -> functions -> update policies -> analytics functions -> lake export.
+#
+# Plain line         = repeatable (.create-merge / .create-or-alter), runs on every release.
+# "create-only X:Y"  = created once; skipped when the object already exists, so a routine
+#                      release never re-alters a live external table or continuous export.
+01_raw_ingestion.kql
+02_silver_quarantine_tables.kql
+03_validation_functions.kql
+04_update_policies.kql
+06_device_health.kql
+07_vibration_anomalies.kql
+08_vibration_forecast.kql
+09_maintenance_alerts.kql
+11_external_parquet.kql      create-only  external-table:TelemetryParquet
+12_continuous_export.kql     create-only  continuous-export:TelemetryHistoricalExport
