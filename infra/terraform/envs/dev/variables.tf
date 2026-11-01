@@ -55,3 +55,8 @@ variable "alert_email" {
   type        = string
   sensitive   = true
 }
+
+variable "deployer_client_id" {
+  description = "Application (client) ID of the Dev GitHub deployer (sp-husky-pdm-dev)"
+  type        = string
+}

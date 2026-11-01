@@ -39,6 +39,7 @@ jobs:
       TF_VAR_iot_hub_name: ${{ vars.TF_IOT_HUB_NAME }}
       TF_VAR_adx_cluster_name: ${{ vars.TF_ADX_CLUSTER_NAME }}
       TF_VAR_adx_admin_object_id: ${{ vars.TF_ADX_ADMIN_OBJECT_ID }}
+      TF_VAR_deployer_client_id: ${{ vars.AZURE_CLIENT_ID }}
       TF_VAR_synapse_workspace_name: ${{ vars.TF_SYNAPSE_WORKSPACE_NAME }}
       TF_VAR_synapse_location: ${{ vars.TF_SYNAPSE_LOCATION }}
       TF_VAR_synapse_managed_resource_group_name: ${{ vars.TF_SYNAPSE_MANAGED_RG_NAME }}

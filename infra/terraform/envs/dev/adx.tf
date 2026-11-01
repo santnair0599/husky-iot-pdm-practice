@@ -42,7 +42,6 @@ resource "azurerm_iothub_consumer_group" "adx" {
   eventhub_endpoint_name = "events"
 }
 
-
 resource "azurerm_iothub_shared_access_policy" "adx_reader" {
   name                = "adx-reader"
   resource_group_name = azurerm_resource_group.pdm.name
@@ -51,19 +50,6 @@ resource "azurerm_iothub_shared_access_policy" "adx_reader" {
   registry_read   = true
   service_connect = true
 }
-
-resource "azurerm_kusto_script" "raw_ingestion" {
-  name        = "deploy-raw-ingestion"
-  database_id = azurerm_kusto_database.pdm.id
-
-  # Normalise CRLF (Windows checkout) to LF (CI checkout) so the content hash matches everywhere
-  script_content = replace(file(
-    "${path.module}/../../../../kql/01_raw_ingestion.kql"
-  ), "\r\n", "\n")
-
-  continue_on_errors_enabled = false
-}
-
 
 resource "azurerm_kusto_iothub_data_connection" "telemetry" {
   name                = "iot-telemetry-dev"
@@ -85,76 +71,6 @@ resource "azurerm_kusto_iothub_data_connection" "telemetry" {
     "iothub-connection-device-id"
   ]
 
-  depends_on = [
-    azurerm_kusto_script.raw_ingestion
-  ]
-}
-
-
-resource "azurerm_kusto_script" "dq_tables" {
-  name        = "deploy-dq-tables"
-  database_id = azurerm_kusto_database.pdm.id
-
-  # Normalise CRLF (Windows checkout) to LF (CI checkout) so the content hash matches everywhere
-  script_content = replace(file(
-    "${path.module}/../../../../kql/02_silver_quarantine_tables.kql"
-  ), "\r\n", "\n")
-
-  continue_on_errors_enabled = false
-}
-
-resource "azurerm_kusto_script" "dq_functions" {
-  name        = "deploy-dq-functions"
-  database_id = azurerm_kusto_database.pdm.id
-
-  # Normalise CRLF (Windows checkout) to LF (CI checkout) so the content hash matches everywhere
-  script_content = replace(file(
-    "${path.module}/../../../../kql/03_validation_functions.kql"
-  ), "\r\n", "\n")
-
-  continue_on_errors_enabled = false
-
-  depends_on = [
-    azurerm_kusto_script.raw_ingestion,
-    azurerm_kusto_script.dq_tables
-  ]
-}
-
-resource "azurerm_kusto_script" "dq_policies" {
-  name        = "deploy-dq-policies"
-  database_id = azurerm_kusto_database.pdm.id
-
-  # Normalise CRLF (Windows checkout) to LF (CI checkout) so the content hash matches everywhere
-  script_content = replace(file(
-    "${path.module}/../../../../kql/04_update_policies.kql"
-  ), "\r\n", "\n")
-
-  continue_on_errors_enabled = false
-
-  depends_on = [
-    azurerm_kusto_script.dq_functions
-  ]
-}
-
-
-resource "azurerm_kusto_script" "predictive_analytics" {
-  name        = "deploy-predictive-analytics"
-  database_id = azurerm_kusto_database.pdm.id
-
-  # Normalise CRLF (Windows checkout) to LF (CI checkout) so the content hash matches everywhere
-  script_content = replace(join("\n\n", [
-    file("${path.module}/../../../../kql/06_device_health.kql"),
-    file("${path.module}/../../../../kql/07_vibration_anomalies.kql"),
-    file("${path.module}/../../../../kql/08_vibration_forecast.kql"),
-    file("${path.module}/../../../../kql/09_maintenance_alerts.kql")
-  ]), "\r\n", "\n")
-
-  continue_on_errors_enabled = false
-
-  depends_on = [
-    azurerm_kusto_script.dq_functions,
-    azurerm_kusto_script.dq_policies
-  ]
 }
 
 resource "azurerm_kusto_cluster_principal_assignment" "admin" {
@@ -167,3 +83,61 @@ resource "azurerm_kusto_cluster_principal_assignment" "admin" {
   role                = "AllDatabasesAdmin"
 }
 
+# Lesson 19A: the release pipeline deploys KQL through the ADX data plane,
+# which Azure RBAC (Contributor) does not cover. Admin on this ONE database only.
+resource "azurerm_kusto_database_principal_assignment" "deployer" {
+  name                = "github-deployer-admin"
+  resource_group_name = azurerm_resource_group.pdm.name
+  cluster_name        = azurerm_kusto_cluster.pdm.name
+  database_name       = azurerm_kusto_database.pdm.name
+  tenant_id           = "874dd38d-b50f-40f3-9c7d-8c1342244a1d"
+  principal_id        = var.deployer_client_id
+  principal_type      = "App"
+  role                = "Admin"
+}
+
+
+# Lesson 19: application KQL (tables, mappings, functions, update policies,
+# exports) is now owned by scripts/deploy_kql.py and deploy-app-dev.yml.
+# These blocks make Terraform FORGET its old script resources without
+# running or deleting anything in the database. One owner per object.
+
+removed {
+  from = azurerm_kusto_script.raw_ingestion
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = azurerm_kusto_script.dq_tables
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = azurerm_kusto_script.dq_functions
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = azurerm_kusto_script.dq_policies
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = azurerm_kusto_script.predictive_analytics
+
+  lifecycle {
+    destroy = false
+  }
+}
