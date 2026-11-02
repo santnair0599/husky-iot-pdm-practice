@@ -1,0 +1,26 @@
+{
+  "Name": "Husky PDM Deployer (prod)",
+  "IsCustom": true,
+  "Description": "Contributor on rg-husky-pdm-prod without access management or data-plane admin grants (ADX principals/scripts, Synapse SQL admins). Created by hand by an admin; see docs/test-environment.md.",
+  "Actions": ["*"],
+  "NotActions": [
+    "Microsoft.Authorization/*/Delete",
+    "Microsoft.Authorization/*/Write",
+    "Microsoft.Authorization/elevateAccess/Action",
+    "Microsoft.Kusto/clusters/principalAssignments/write",
+    "Microsoft.Kusto/clusters/principalAssignments/delete",
+    "Microsoft.Kusto/clusters/databases/principalAssignments/write",
+    "Microsoft.Kusto/clusters/databases/principalAssignments/delete",
+    "Microsoft.Kusto/clusters/databases/addPrincipals/action",
+    "Microsoft.Kusto/clusters/databases/removePrincipals/action",
+    "Microsoft.Synapse/workspaces/administrators/write",
+    "Microsoft.Synapse/workspaces/administrators/delete",
+    "Microsoft.Synapse/workspaces/sqlAdministrators/write",
+    "Microsoft.Synapse/workspaces/sqlAdministrators/delete"
+  ],
+  "DataActions": [],
+  "NotDataActions": [],
+  "AssignableScopes": [
+    "/subscriptions/1b0f0a4d-525c-4fac-ad07-dffbe66dd248/resourceGroups/rg-husky-pdm-prod"
+  ]
+}

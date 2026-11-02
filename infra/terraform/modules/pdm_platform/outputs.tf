@@ -19,11 +19,15 @@ output "adx_database_name" {
 }
 
 output "synapse_workspace_name" {
-  value = azurerm_synapse_workspace.pdm.name
+  value = local.synapse_name
 }
 
 output "synapse_sql_serverless_endpoint" {
-  value = azurerm_synapse_workspace.pdm.connectivity_endpoints["sqlOnDemand"]
+  value = local.synapse_sql_endpoint
+}
+
+output "synapse_mode" {
+  value = var.synapse_mode
 }
 
 output "data_connection_created" {

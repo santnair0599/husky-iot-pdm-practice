@@ -1,0 +1,382 @@
+name: Husky PROD - Approved Terraform Deployment
+
+# Isolation does not rely on this file alone: the "prod" environment's OIDC
+# identity (sp-husky-pdm-prod) can only reach rg-husky-pdm-prod and the
+# tfstate-prod container, so even a mistake here cannot change Dev or Test.
+#
+# Runs only from a prod-release-* tag that contains the tested release
+# (vars.TESTED_RELEASE_TAG). Approval: the "prod-approval" reviewer is the person
+# who triggers the run (solo project). Recorded human gate, NOT independent review.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: husky-terraform-prod
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.15.5"
+  EXPECTED_RG: rg-husky-pdm-prod
+  STATE_CONTAINER: tfstate-prod
+  STATE_KEY: husky-prod.tfstate
+
+jobs:
+  plan:
+    name: Terraform Plan PROD
+    runs-on: ubuntu-latest
+    environment: prod
+
+    permissions:
+      contents: read
+      id-token: write
+
+    outputs:
+      commit_sha: ${{ steps.meta.outputs.commit_sha }}
+      has_changes: ${{ steps.plan.outputs.has_changes }}
+
+    defaults:
+      run:
+        working-directory: infra/terraform/envs/prod
+
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_USE_CLI: "false"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+
+      TF_VAR_resource_group_name: ${{ vars.TF_RESOURCE_GROUP_NAME }}
+      TF_VAR_location: ${{ vars.TF_LOCATION }}
+      TF_VAR_storage_account_name: ${{ vars.TF_STORAGE_ACCOUNT_NAME }}
+      TF_VAR_iot_hub_name: ${{ vars.TF_IOT_HUB_NAME }}
+      TF_VAR_adx_cluster_name: ${{ vars.TF_ADX_CLUSTER_NAME }}
+      TF_VAR_adx_database_name: ${{ vars.ADX_DATABASE }}
+      TF_VAR_create_data_connection: ${{ vars.TF_CREATE_DATA_CONNECTION }}
+      TF_VAR_synapse_workspace_name: ${{ vars.TF_SYNAPSE_WORKSPACE_NAME }}
+      TF_VAR_synapse_location: ${{ vars.TF_SYNAPSE_LOCATION }}
+      TF_VAR_synapse_mode: ${{ vars.TF_SYNAPSE_MODE }}
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+
+    steps:
+      - name: Checkout (full history, for the promotion check)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Release tag guard (prod-release-* only)
+        env:
+          TESTED_TAG: ${{ vars.TESTED_RELEASE_TAG }}
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/prod-release-*) ;;
+            *) echo "::error::Prod runs only from a prod-release-* tag (got $GITHUB_REF)"; exit 1 ;;
+          esac
+          case "$TESTED_TAG" in test-passed-*) ;; *) echo "::error::TESTED_RELEASE_TAG must be a test-passed-* tag"; exit 1 ;; esac
+          # The Prod release must be built on top of what passed Test
+          git merge-base --is-ancestor "refs/tags/$TESTED_TAG" HEAD \
+            || { echo "::error::$GITHUB_REF does not contain the tested release $TESTED_TAG"; exit 1; }
+          # The shared module must be the one Test ran, except the reviewed synapse_mode change
+          git diff --stat "refs/tags/$TESTED_TAG" HEAD -- infra/terraform/modules
+          echo "Release ${GITHUB_REF#refs/tags/} contains tested release $TESTED_TAG"
+
+      - name: Record source commit
+        id: meta
+        run: echo "commit_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Target guard (prod only)
+        env:
+          VAR_STATE_CONTAINER: ${{ vars.TF_STATE_CONTAINER }}
+          VAR_STATE_KEY: ${{ vars.TF_STATE_KEY }}
+        run: |
+          fail=0
+          [ "$TF_VAR_resource_group_name" = "$EXPECTED_RG" ] || { echo "::error::TF_RESOURCE_GROUP_NAME is '$TF_VAR_resource_group_name', expected $EXPECTED_RG"; fail=1; }
+          # State location is fixed in this file; the environment variables must agree with it
+          [ "$VAR_STATE_CONTAINER" = "$STATE_CONTAINER" ] || { echo "::error::TF_STATE_CONTAINER is '$VAR_STATE_CONTAINER', expected $STATE_CONTAINER"; fail=1; }
+          [ "$VAR_STATE_KEY" = "$STATE_KEY" ] || { echo "::error::TF_STATE_KEY is '$VAR_STATE_KEY', expected $STATE_KEY"; fail=1; }
+          case "$TF_VAR_synapse_mode" in none|existing) ;; *) echo "::error::TF_SYNAPSE_MODE must be none or existing"; fail=1 ;; esac
+          # Identifiers must be GUIDs, not placeholder text
+          for pair in "AZURE_CLIENT_ID=$ARM_CLIENT_ID" "AZURE_TENANT_ID=$ARM_TENANT_ID" "AZURE_SUBSCRIPTION_ID=$ARM_SUBSCRIPTION_ID"; do
+            echo "${pair#*=}" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
+              || { echo "::error::${pair%%=*} is not a GUID"; fail=1; }
+          done
+          for v in "$TF_VAR_storage_account_name" "$TF_VAR_iot_hub_name" "$TF_VAR_adx_cluster_name" "$TF_VAR_synapse_workspace_name" "$TF_VAR_adx_database_name"; do
+            case "$v" in *prod*) ;; *) echo "::error::'$v' does not look like a Prod resource"; fail=1 ;; esac
+            case "$v" in *dev*|*test*) echo "::error::'$v' names another environment"; fail=1 ;; esac
+          done
+          exit $fail
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Azure OIDC Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Prove identity isolation (must NOT see Dev or Test)
+        run: |
+          for other in rg-husky-pdm-dev rg-husky-pdm-test; do
+            if az group show --name "$other" --output none 2>/dev/null; then
+              echo "::error::The Prod identity can read $other. Isolation is broken; stopping."
+              exit 1
+            fi
+            echo "OK: Prod identity cannot access $other"
+          done
+          az group show --name "$EXPECTED_RG" --query "{name:name,location:location}" -o json
+
+      - name: Check ADX is running (or not created yet)
+        run: |
+          state=$(az kusto cluster show \
+            --name "$TF_VAR_adx_cluster_name" \
+            --resource-group "$TF_VAR_resource_group_name" \
+            --query state -o tsv 2>/dev/null || echo "NotCreated")
+          echo "ADX state: $state"
+          if [ "$state" != "Running" ] && [ "$state" != "NotCreated" ]; then
+            echo "::error::ADX cluster is $state. Start it before running this workflow."
+            exit 1
+          fi
+
+      - name: Terraform Init
+        env:
+          STATE_ACCOUNT: ${{ vars.TF_STATE_ACCOUNT }}
+        run: |
+          terraform init -reconfigure \
+            -backend-config="storage_account_name=$STATE_ACCOUNT" \
+            -backend-config="container_name=$STATE_CONTAINER" \
+            -backend-config="key=$STATE_KEY"
+
+      - name: Format and validate
+        run: |
+          terraform fmt -check -recursive
+          terraform fmt -check -recursive ../../modules
+          terraform validate
+
+      - name: Generate saved plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -lock-timeout=5m -input=false -detailed-exitcode -out=prod.tfplan
+          code=$?
+          set -e
+          case $code in
+            0) echo "has_changes=false" >> "$GITHUB_OUTPUT"; echo "No changes: approval and apply will be skipped." ;;
+            2) echo "has_changes=true"  >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::terraform plan failed"; exit 1 ;;
+          esac
+
+      - name: Publish plan for the reviewer
+        run: |
+          {
+            echo "## Terraform plan for PROD (commit ${GITHUB_SHA::7})"
+            echo '```'
+            terraform show -no-color prod.tfplan | grep -E '^\s*[#~+-]|Plan:|No changes' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Plan guards (deletes, privilege grants)
+        env:
+          DEPLOYER_OBJECT_ID: ${{ vars.DEPLOYER_OBJECT_ID }}
+        run: |
+          terraform show -json prod.tfplan > plan.json
+          fail=0
+
+          echo "Planned actions:"
+          jq -r '.resource_changes[]? | select(.change.actions != ["no-op"])
+                 | [.address, (.change.actions | join(","))] | @tsv' plan.json
+
+          # 1. No delete or replace (a replace is delete + create)
+          if jq -e '[.resource_changes[]? | select(.change.actions | index("delete"))] | length > 0' plan.json >/dev/null; then
+            echo "::error::Plan deletes or replaces resources. Not allowed through this workflow."; fail=1
+          fi
+
+          # 2. Data-plane admin grants are admin-only, never through the pipeline
+          blocked=$(jq -r '.resource_changes[]? | select(.change.actions != ["no-op"])
+            | select(.type | IN("azurerm_kusto_script","azurerm_kusto_cluster_principal_assignment",
+                                 "azurerm_kusto_database_principal_assignment","azurerm_synapse_workspace_aad_admin",
+                                 "azurerm_synapse_workspace_sql_aad_admin","azurerm_synapse_role_assignment"))
+            | .address' plan.json)
+          if [ -n "$blocked" ]; then
+            echo "::error::Plan contains admin-only resources: $blocked"; fail=1
+          fi
+
+          # 3. Role assignments: only the two blob data roles, never to the deployer itself
+          bad=$(jq -r --arg me "$DEPLOYER_OBJECT_ID" '.resource_changes[]?
+            | select(.type == "azurerm_role_assignment" and (.change.actions | index("create")))
+            | select((.change.after.role_definition_name // "") as $r
+                     | ($r != "Storage Blob Data Contributor" and $r != "Storage Blob Data Reader")
+                       or (.change.after.principal_id == $me))
+            | .address' plan.json)
+          if [ -n "$bad" ]; then
+            echo "::error::Role assignment outside the allowed set: $bad"; fail=1
+          fi
+
+          rm plan.json
+          exit $fail
+
+      - name: Checksum and provenance
+        run: |
+          sha256sum prod.tfplan > prod.tfplan.sha256
+          jq -n \
+            --arg commit "$GITHUB_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg workflow "$GITHUB_WORKFLOW_REF" \
+            --arg environment "prod" \
+            --arg state "$STATE_CONTAINER/$STATE_KEY" \
+            --arg plan_sha256 "$(cut -d' ' -f1 prod.tfplan.sha256)" \
+            '{commit:$commit, run_id:$run_id, attempt:$attempt, workflow:$workflow,
+              environment:$environment, state:$state, plan_sha256:$plan_sha256}' > provenance.json
+          cat provenance.json
+
+      - name: Upload saved plan
+        if: steps.plan.outputs.has_changes == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            infra/terraform/envs/prod/prod.tfplan
+            infra/terraform/envs/prod/prod.tfplan.sha256
+            infra/terraform/envs/prod/provenance.json
+          retention-days: 1
+          if-no-files-found: error
+
+  approval:
+    name: Review and Approve PROD
+    needs: plan
+    if: needs.plan.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    # Reviewer gate only: this environment has no OIDC trust, so no Azure access
+    environment: prod-approval
+
+    steps:
+      - name: Approval gate passed
+        run: echo "Approved PROD plan for commit ${{ needs.plan.outputs.commit_sha }}."
+
+  apply:
+    name: Apply Approved PROD Plan
+    needs: [plan, approval]
+    if: needs.plan.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    environment: prod
+
+    permissions:
+      contents: read
+      id-token: write
+
+    defaults:
+      run:
+        working-directory: infra/terraform/envs/prod
+
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_USE_CLI: "false"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+
+      # Only needed for the post-apply no-change plan
+      TF_VAR_resource_group_name: ${{ vars.TF_RESOURCE_GROUP_NAME }}
+      TF_VAR_location: ${{ vars.TF_LOCATION }}
+      TF_VAR_storage_account_name: ${{ vars.TF_STORAGE_ACCOUNT_NAME }}
+      TF_VAR_iot_hub_name: ${{ vars.TF_IOT_HUB_NAME }}
+      TF_VAR_adx_cluster_name: ${{ vars.TF_ADX_CLUSTER_NAME }}
+      TF_VAR_adx_database_name: ${{ vars.ADX_DATABASE }}
+      TF_VAR_create_data_connection: ${{ vars.TF_CREATE_DATA_CONNECTION }}
+      TF_VAR_synapse_workspace_name: ${{ vars.TF_SYNAPSE_WORKSPACE_NAME }}
+      TF_VAR_synapse_location: ${{ vars.TF_SYNAPSE_LOCATION }}
+      TF_VAR_synapse_mode: ${{ vars.TF_SYNAPSE_MODE }}
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+
+    steps:
+      - name: Checkout planned commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Azure OIDC Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform Init
+        env:
+          STATE_ACCOUNT: ${{ vars.TF_STATE_ACCOUNT }}
+        run: |
+          terraform init -reconfigure \
+            -backend-config="storage_account_name=$STATE_ACCOUNT" \
+            -backend-config="container_name=$STATE_CONTAINER" \
+            -backend-config="key=$STATE_KEY"
+
+      - name: Download approved plan
+        uses: actions/download-artifact@v4
+        with:
+          name: prod-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: infra/terraform/envs/prod
+
+      - name: Verify checksum and provenance
+        env:
+          PLANNED_SHA: ${{ needs.plan.outputs.commit_sha }}
+        run: |
+          sha256sum -c prod.tfplan.sha256
+          jq -e --arg c "$PLANNED_SHA" --arg h "$(git rev-parse HEAD)" --arg r "$GITHUB_RUN_ID" \
+                --arg p "$(cut -d' ' -f1 prod.tfplan.sha256)" '
+            .commit == $c and .commit == $h and .run_id == $r
+            and .environment == "prod" and .state == "tfstate-prod/husky-prod.tfstate"
+            and .plan_sha256 == $p' provenance.json
+          echo "Provenance OK: plan from this run, commit $PLANNED_SHA, environment prod"
+
+      - name: Apply exact saved plan
+        run: terraform apply -lock-timeout=5m -input=false prod.tfplan
+
+      - name: Post-apply verification (must be no-change)
+        run: |
+          set +e
+          terraform plan -lock-timeout=5m -input=false -detailed-exitcode -no-color > post-plan.txt
+          code=$?
+          set -e
+          if [ $code -ne 0 ]; then
+            cat post-plan.txt
+            echo "::error::Plan after apply is not clean (exit $code)."
+            exit 1
+          fi
+          echo "Post-apply plan: No changes."
+          terraform state list
+          terraform output
+
+      - name: Post-apply check (deployer is not the Synapse SQL admin)
+        if: vars.TF_SYNAPSE_MODE == 'existing'
+        env:
+          DEPLOYER_OBJECT_ID: ${{ vars.DEPLOYER_OBJECT_ID }}
+        run: |
+          sid=$(az synapse sql ad-admin show --workspace-name "$TF_VAR_synapse_workspace_name" \
+                  --resource-group "$TF_VAR_resource_group_name" --query sid -o tsv)
+          if [ "$sid" = "$DEPLOYER_OBJECT_ID" ]; then
+            echo "::error::The deployer is the Synapse SQL admin; an admin must replace it."; exit 1
+          fi
+          echo "OK: Synapse SQL admin is $sid (not the deployer)"
