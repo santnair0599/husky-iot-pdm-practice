@@ -99,9 +99,9 @@ The `quarantine` storage container exists, but nothing in this repository writes
 | ADX Bronze / Silver / Quarantine, predictive-maintenance functions | Implemented (Dev) |
 | Parquet export, Synapse views, Power BI live report | Implemented (Dev) |
 | Azure Monitor diagnostics and alerts | Implemented (Dev) |
-| Terraform remote state, OIDC, no-change gate, approved-plan apply | Implemented (Dev) |
-| Application release pipeline with end-to-end tests (Lessons 19A–19C) | Implemented and proven (Dev) |
-| Data-health gates: freshness and reconciliation (Lesson 19D) | **Skipped**. Draft test file kept uncommitted. |
-| Test and Prod environments, promotion, rollback (Lesson 18C Test/Prod) | **Not started.** `envs/test` and `envs/prod` do not exist; only their state containers do. |
+| Terraform remote state, OIDC, no-change gate, approved-plan apply | Implemented (Dev, Test, Prod) |
+| Application release pipeline with end-to-end tests (Lessons 19A–19C) | Implemented and proven: Dev and Test 13/13, Prod smoke test |
+| Data-health gates: freshness and reconciliation (Lesson 19D) | **Not verified** in any environment. Draft test file kept uncommitted. |
+| Test and Prod environments, promotion (Lesson 18C) | **Deployed 2026-11-01/02.** Test accepted, then its Synapse was retired (ADX-only). Prod promoted from `test-passed-2026-11-02` via `prod-release-2026-11-02-1`. See [test-environment.md](test-environment.md) and [prod-environment.md](prod-environment.md). |
 | Failure drills | **Not started** (planned next) |
 | Security hardening (network restriction, key-less ADX connection, `pbi-analyst` in Terraform) | **Not started**; see [security.md](security.md#known-gaps) |

@@ -1,6 +1,37 @@
 # Test environment (Lesson 18C-T)
 
-> **Status: implemented in code, NOT deployed.** Nothing in this page has been run against Azure. It's the plan for review.
+> **Status (2026-11-02): deployed and accepted. Test Synapse has since been retired, so Test is now ADX-only.**
+> - **Accepted:** 13 of 13 integration tests passed in run `41401561043` (commit `86fad6d`), tagged **`test-passed-2026-11-02`**. Prod promotes exactly that release ([prod-environment.md](prod-environment.md)).
+> - **Retired:** the Test Synapse workspace was removed through a reviewed, saved Terraform plan (3 deletions) to free the subscription's Synapse quota (2 workspaces) for Prod. The follow-up run `41428063618` showed **No changes**. See [test-synapse-retirement.md](test-synapse-retirement.md).
+> - **Now:** `deploy-app-test.yml` works with **`kql-only`** only. `kql-sql` and `full` need Synapse again (rebuild steps are in the retirement doc). ADX, IoT Hub, storage and monitoring remain. GitHub variable `TF_SYNAPSE_MODE=none`.
+> - **Reconciliation has NOT been verified** in Test or anywhere else.
+
+## Evidence
+
+| Run | Workflow | Commit | Result | What it proved |
+|---|---|---|---|---|
+| `41329005231` | approved Terraform | `96e6726` | success | OIDC; `OK: Test identity cannot access rg-husky-pdm-dev`; 23 added via the exact saved plan; post-apply no-change |
+| `41329123385` | approved Terraform | `96e6726` | success | follow-up run: no changes, so approval and apply skipped |
+| `41338201298` | one-time Synapse handover | `77d6c52` | success | human admin granted Synapse Administrator (workflow deleted in PR #3) |
+| `41340635265`, `41341166102` | app `kql-only` | `ab2f363` | failure | export refused: the managed identity policy and the cluster identity's Viewer role were missing |
+| `41341600305` | app `kql-only` | `ab2f363` | success | KQL deployed; re-run skipped 11/12; `5 passed` |
+| `41394765861` | approved Terraform | `ab2f363` | failure | the ADX-stopped check worked as designed |
+| `41396226090` | approved Terraform | `ab2f363` | success | IoT Hub → ADX data connection: 1 added |
+| `41397526409` | app `kql-sql` | `ab2f363` | failure | Synapse deployed with the deployer's 6 grants; the lake-read check failed because the lake was empty (found the step-order issue, PR #4) |
+| `41399028829`, `41400247069` | app `full` | `ab2f363`, `bbaf7a6` | failure | found the step-order issue (PR #4) and the empty-lake wait bug (PR #5) |
+| **`41401561043`** | **app `full`** | **`86fad6d`** | **success** | **13 of 13**: Bronze 337 s, Quarantine, raw archive, Parquet → Synapse 253 s, views read the lake |
+| `41407963105` | approved Terraform | `a470b89` | success | module `synapse_mode` change: 3 moved, 0 added/changed/destroyed |
+| — (admin, local saved plan) | Synapse retirement | `eba97f2` | success | `0 added, 0 changed, 3 destroyed` (workspace + 2 roles), plan reviewed first |
+| `41428063618` | approved Terraform | `eba97f2` | success | after retirement: **No changes** |
+
+The logs are saved outside the repo in `C:\dev\azure\husky-evidence\test\`. The release file hashes are in [test-synapse-retirement.md](test-synapse-retirement.md#release-file-hashes-at-test-passed-2026-11-02).
+
+**Steps the original plan below didn't include, all discovered here:**
+- the cluster's system identity must be **Viewer** on `pdm_test`
+- the pipeline-created Synapse workspace made the deployer its only Synapse Administrator and Entra SQL admin, which needed the one-time handover; the serverless SQL login needed Synapse RBAC, not just the SQL admin setting
+- the empty-lake behaviour, error 13807
+
+Prod handles all three by design ([prod-environment.md § Problems](prod-environment.md#problems-found-in-the-real-deployments)).
 
 Test reuses the verified Dev design through a Terraform module, with stronger isolation than Dev:
 
@@ -46,7 +77,7 @@ Dev isn't migrated to the module yet. That needs `moved` blocks and a proven no-
 
 | # | Who | Step | Creates paid resources? |
 |---|---|---|---|
-| 1 | Admin | `infra/bootstrap-env`: `terraform workspace new test`, then plan, review and apply with `-var environment=test` | no (resource group, app, roles) |
+| 1 | Admin | `infra/bootstrap-env`: `terraform workspace new test`, then plan, review and apply with `-var environment=test`. **As executed:** the manual route instead: the app and credential in the portal, the resource group and roles via `az` using [`infra/roles/`](../infra/roles) (the custom role JSON and the role-grant condition). | no (resource group, app, roles) |
 | 2 | Admin | GitHub: create environments `test` (branch policy `main`) and `test-approval` (required reviewer); set the variables and `ALERT_EMAIL` secret listed below; `TF_CREATE_DATA_CONNECTION=false` | no |
 | 3 | Pipeline | `deploy-test-approved.yml`: review the plan, approve, apply | **yes**: ADX, IoT Hub B1, Synapse, storage, Log Analytics |
 | 4 | Admin | ADX: add yourself as `AllDatabasesAdmin`, add the deployer as `Admin` on `pdm_test`, **remove the deployer's automatic creator rights**, allow the system managed identity for continuous export (commands below) | no |
@@ -114,18 +145,19 @@ az role assignment create --assignee $deployerClientId --role "Storage Blob Data
 
 ## Acceptance criteria and evidence
 
-| # | Criterion | Evidence to record |
-|---|---|---|
-| 1 | Test uses its own state | plan log: init with `tfstate-test`/`husky-test.tfstate`; `provenance.json` |
-| 2 | Its own identity and scope | "Prove identity isolation" step: `OK: Test identity cannot access rg-husky-pdm-dev` |
-| 3 | OIDC works | "Azure OIDC Login" succeeds with the Test client ID |
-| 4 | Approval required | run waits at `test-approval` until approved |
-| 5 | Exact-plan apply | `test.tfplan: OK` and "Provenance OK", then apply |
-| 6 | ADX and Synapse objects | `deploy-app-test` (`kql-only`, then `full`): Verify KQL objects `5 passed`, Verify Synapse views `2 passed` |
-| 7 | Bronze / Silver / Quarantine | `full` run: Verify Bronze and Silver, Verify quarantine |
-| 8 | Archive and Synapse reporting | `full` run: Verify raw archive, Verify Synapse historical export |
-| 9 | Dev not modified | identity isolation (criterion 2); optionally a Dev no-change gate run (`deploy-dev.yml`, needs Dev ADX running) |
-| 10 | Subsequent no-change | post-apply step "Post-apply plan: No changes", plus step 10 showing approval and apply skipped |
+| # | Criterion | Evidence | Result |
+|---|---|---|---|
+| 1 | Test uses its own state | plan log: init with `tfstate-test`/`husky-test.tfstate`; `provenance.json` | ✅ `41329005231` |
+| 2 | Its own identity and scope | `OK: Test identity cannot access rg-husky-pdm-dev` | ✅ every infra run |
+| 3 | OIDC works | "Azure OIDC Login" with the Test client ID | ✅ |
+| 4 | Approval required | run waits at `test-approval` until approved | ✅ approved by `santnair0599` (**self-approval**) |
+| 5 | Exact-plan apply | `test.tfplan: OK` and "Provenance OK", then apply | ✅ `41329005231`, `41396226090` |
+| 6 | ADX and Synapse objects | Verify KQL objects `5 passed`; Synapse views exist and read the lake | ✅ `41341600305`, `41401561043` |
+| 7 | Bronze / Silver / Quarantine | Verify Bronze and Silver; Verify quarantine | ✅ `41401561043` |
+| 8 | Archive and Synapse reporting | Verify raw archive; Verify Synapse historical export | ✅ `41401561043` |
+| 9 | Dev not modified | identity isolation (criterion 2) | ✅ by isolation. A direct Dev no-change gate run was **not** done after the Test deployment. |
+| 10 | Subsequent no-change | "Post-apply plan: No changes"; follow-up run skips approval and apply | ✅ `41329123385`, `41428063618` |
+| 11 | **Reconciliation** (Bronze = Silver + Quarantine) | — | ❌ **NOT VERIFIED**. `test_data_health.py` is an uncommitted draft that has never passed. |
 
 ## Estimated cost
 
@@ -146,7 +178,11 @@ Prices are Azure retail list prices, queried on 2026-11-01 from `prices.azure.co
 | Keep Test for a month, ADX running about 10 h | about $12–15 |
 | **Forget to stop ADX** | about **+$3 per day** (+$92 per month) |
 
-Tear-down isn't automated. The workflow blocks deletes by design, and `pdm_test` has `prevent_destroy`. Removing Test needs a reviewed, admin-run `terraform plan -destroy` after removing that guard. Write that procedure before deploying, if Test is meant to be temporary.
+Tear-down isn't automated: the workflow blocks deletes by design, and `pdm_test` has `prevent_destroy`.
+- **Partial:** the Synapse part has been retired using [test-synapse-retirement.md](test-synapse-retirement.md).
+- **Full:** removing the rest of Test follows the same admin-run, reviewed-plan pattern ([runbooks.md §9](runbooks.md#9-cost-control-and-clean-up)).
+
+While Test exists, its IoT Hub B1 costs **$10/month even when idle**.
 
 ## Residual privilege-escalation paths
 
@@ -161,9 +197,11 @@ The custom role and plan guards close the Dev gap for ADX and Synapse admin gran
 | ARM KQL scripts (`azurerm_kusto_script`) can't be denied in the custom role. Azure rejects `.../databases/scripts/write` as an unknown action, and creating a script appears to be authorised by database write, which the deployer needs. A script could run `.add database ... admins`. | there's no separate RBAC action | the plan guard blocks `azurerm_kusto_script`; human review of every plan |
 | One human is both author and reviewer | single-person project | For Prod, use a second reviewer with "prevent self-review" on the environment. |
 
-## Known risks before the first apply
+## Pre-deployment risks: how they turned out
 
-These haven't been tested yet. Each would fail **safely**, at plan or apply, without deleting anything:
-- **Synapse workspace creation** with a deployer limited to one resource group. The managed resource group is expected to be created by the Synapse service; if it isn't, an admin creates the workspace once.
-- **The RBAC condition syntax** (`ForAnyOfAllValues:GuidNotEquals` on `PrincipalId`) is checked by Azure at step 1. If it's rejected, remove that one clause and rely on the plan guard's self-grant check.
-- **The managed identity policy (step 4c)** may already allow the system identity. Check it with `.show` first.
+| Risk noted before the first apply | Outcome |
+|---|---|
+| Synapse workspace creation by a deployer limited to one resource group | **worked**: the Synapse service created the managed resource group. But the creator (the deployer) became the only Synapse Administrator and the Entra SQL admin, which needed the handover. |
+| The RBAC condition syntax (`ForAnyOfAllValues:GuidNotEquals`) | **accepted by Azure** (Test and Prod) |
+| The managed identity policy might already allow the system identity | it **didn't** (`[]`). It had to be set, **and** the identity needed Viewer on the database. |
+| The custom role's `.../databases/scripts/write` NotAction | **rejected by Azure** as an unknown action, and removed. The plan guard blocks `azurerm_kusto_script` instead. |

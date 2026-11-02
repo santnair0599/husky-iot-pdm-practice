@@ -1,6 +1,6 @@
 # CI/CD
 
-Infrastructure and application code are deployed separately, by three GitHub Actions workflows. All three are started manually (`workflow_dispatch`); **nothing deploys automatically on push**. All of them run in the GitHub environment `dev` and authenticate to Azure with OIDC.
+Infrastructure and application code are deployed separately. This page describes the **Dev** workflows in detail. **Test and Prod** have the same three-part design, with stronger guards; see [Test and Prod workflows](#test-and-prod-workflows). Every workflow is started manually (`workflow_dispatch`): **nothing deploys automatically on push**. Each runs in its own GitHub environment and authenticates to Azure with OIDC.
 
 | Workflow | File | Purpose |
 |---|---|---|
@@ -139,8 +139,21 @@ Input `scope` picks how much runs:
 | `41310902846` | 2026-11-01 | `9ee29c7` | app release, `kql-sql` | 3 SQL batches completed twice; views `2 passed`; ran as `sp-husky-pdm-dev` |
 | `41313214638` | 2026-11-01 | `fe52f1b` | app release, `full` | all 13 integration tests passed; see [testing.md](testing.md#end-to-end-evidence) |
 
+## Test and Prod workflows
+
+| | Test | Prod |
+|---|---|---|
+| Infrastructure | [`deploy-test-approved.yml`](../.github/workflows/deploy-test-approved.yml) | [`deploy-prod-approved.yml`](../.github/workflows/deploy-prod-approved.yml) |
+| Application | [`deploy-app-test.yml`](../.github/workflows/deploy-app-test.yml) (`kql-only`/`kql-sql`/`full`) | [`deploy-app-prod.yml`](../.github/workflows/deploy-app-prod.yml) (`kql-only`/`kql-sql`/`smoke`) |
+| Environments | `test` (runs from `main`), `test-approval` (reviewer) | `prod` and `prod-approval` (reviewer), both limited to tags `prod-release-*` |
+| Extra guards beyond Dev | target guard (names, state location, GUID IDs); runtime proof that the identity can't read Dev; plan guards against deletes, admin-only resource types, role assignments outside 2 blob roles, and self-grants; `provenance.json` (commit, run, environment, state, plan hash) checked before apply; **post-apply no-change plan**; a run with no changes skips approval and apply | all of Test's, plus: release-tag guard, the tested tag must be an ancestor, **promotion check** (release files identical to `TESTED_RELEASE_TAG`, SHA-256 list in the summary), **preflight** (ADX identity is Viewer, deployer has no cluster or SQL admin), isolation from Dev **and** Test, post-apply check that the deployer isn't the Synapse SQL admin |
+| Approval | self-approval | **self-approval**: not independent review |
+
+Evidence (run IDs): [test-environment.md § Evidence](test-environment.md#evidence) · [prod-environment.md § Deployment evidence](prod-environment.md#deployment-evidence).
+
 ## Not implemented
 
-- Test and Prod workflows, promotion between environments, and rollback tags (Lesson 18C Test/Prod).
+- Independent approval (a second reviewer with "Prevent self-review"), and branch protection on `main`.
+- Automated rollback. Rollback today means re-promoting an earlier `test-passed-*` tag ([prod-environment.md](prod-environment.md#rollback-and-recovery)).
 - Automatic triggers (on push or pull request) and a pull-request CI workflow.
 - Node 24 versions of `actions/checkout`, `actions/setup-python` and `azure/login`. Runs currently show a deprecation notice, and GitHub forces Node 24 at runtime.

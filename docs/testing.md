@@ -74,7 +74,9 @@ The laptop negative controls ran with the administrator's identity, not the depl
 
 ## Lesson 19D (skipped)
 
-Lesson 19D planned two data-health gates and was **skipped by decision**. The draft [`tests/integration/test_data_health.py`](../tests/integration/test_data_health.py) is kept **uncommitted** in the working tree and isn't part of any workflow.
+Lesson 19D planned two data-health gates and was **skipped by decision**. The draft `tests/integration/test_data_health.py` is kept **uncommitted** in the working tree, so it isn't in the repository, and isn't part of any workflow.
+
+**Reconciliation has therefore NOT been verified in Dev, Test or Prod.** Test and Prod acceptance (13/13 in Test run `41401561043`; Prod smoke `41437359315`) don't include it.
 
 | Test | Checks |
 |---|---|
