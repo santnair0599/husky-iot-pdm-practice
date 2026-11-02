@@ -51,6 +51,17 @@ variable "create_data_connection" {
   default     = true
 }
 
+variable "synapse_mode" {
+  description = "create (Terraform creates Synapse), existing (an admin created it; Terraform reads it) or none (not yet)"
+  type        = string
+  default     = "create"
+
+  validation {
+    condition     = contains(["create", "existing", "none"], var.synapse_mode)
+    error_message = "synapse_mode must be create, existing or none."
+  }
+}
+
 variable "synapse_workspace_name" {
   description = "Globally unique Synapse workspace name"
   type        = string
