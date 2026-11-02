@@ -26,6 +26,7 @@ module "platform" {
   adx_database_name      = var.adx_database_name
   create_data_connection = var.create_data_connection
 
+  synapse_mode                        = var.synapse_mode
   synapse_workspace_name              = var.synapse_workspace_name
   synapse_location                    = var.synapse_location
   synapse_managed_resource_group_name = var.synapse_managed_resource_group_name

@@ -58,6 +58,7 @@ jobs:
       TF_VAR_create_data_connection: ${{ vars.TF_CREATE_DATA_CONNECTION }}
       TF_VAR_synapse_workspace_name: ${{ vars.TF_SYNAPSE_WORKSPACE_NAME }}
       TF_VAR_synapse_location: ${{ vars.TF_SYNAPSE_LOCATION }}
+      TF_VAR_synapse_mode: ${{ vars.TF_SYNAPSE_MODE || 'create' }}
       TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
 
     steps:
@@ -275,6 +276,7 @@ jobs:
       TF_VAR_create_data_connection: ${{ vars.TF_CREATE_DATA_CONNECTION }}
       TF_VAR_synapse_workspace_name: ${{ vars.TF_SYNAPSE_WORKSPACE_NAME }}
       TF_VAR_synapse_location: ${{ vars.TF_SYNAPSE_LOCATION }}
+      TF_VAR_synapse_mode: ${{ vars.TF_SYNAPSE_MODE || 'create' }}
       TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
 
     steps:
