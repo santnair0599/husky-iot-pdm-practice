@@ -4,7 +4,7 @@ The principles used in Dev:
 
 1. **No stored Azure credentials in CI.** GitHub Actions uses OIDC ([cicd.md](cicd.md#authentication-oidc-no-stored-azure-secret)).
 2. **Least privilege per identity.** Each identity gets only the data access its job needs, scoped to a container or database where possible.
-3. **The deployer can't grant itself data access.** Grants that widen the deployer's data access are made by a human admin, outside the pipeline, and recorded in Git ([`infra/manual-grants.md`](../infra/manual-grants.md), [`synapse/00_grant_deployer.sql`](../synapse/00_grant_deployer.sql)). One exception is documented under [known gaps](#known-gaps).
+3. **The deployer can't grant itself data access.** Grants that widen the deployer's data access are made by a human admin, outside the pipeline, and recorded in Git ([`infra/manual-grants.md`](../infra/manual-grants.md), [`synapse/00_grant_deployer.sql`](../synapse/00_grant_deployer.sql)). One exception for **Dev** is documented under [known gaps](#known-gaps). Test and Prod close it with a narrowed custom role ([test-environment.md](test-environment.md)).
 4. **No SQL or storage passwords in any release.** Synapse uses Entra-only authentication, and the SQL deploy script rejects password, master-key and secret statements.
 
 ## Identities and what they can do
@@ -80,7 +80,7 @@ These are deliberate lab shortcuts or open findings. Lessons 1–19 did not fix 
 
 | Gap | Risk | Suggested fix |
 |---|---|---|
-| **The deployer could raise its own ADX rights through Terraform.** `Contributor` includes writing `Microsoft.Kusto/.../principalAssignments`, the control-plane resource that grants ADX data access. | A Terraform change could give the deployer (or anyone) more ADX access. Today the only control is the human reviewer in the approved workflow. | A plan check that fails on new `azurerm_kusto_*principal_assignment` resources, or a custom role without `principalAssignments/write`. |
+| **The deployer could raise its own ADX rights through Terraform.** `Contributor` includes writing `Microsoft.Kusto/.../principalAssignments`, the control-plane resource that grants ADX data access. | A Terraform change could give the deployer (or anyone) more ADX access. Today the only control is the human reviewer in the approved workflow. | **Dev only.** Test and Prod use the custom role `Husky PDM Deployer (<env>)` without `principalAssignments/write` and Synapse admin writes, plus plan guards that block these resource types. For Dev: apply the same approach. |
 | Synapse firewall rule `allowAll` (0.0.0.0–255.255.255.255) and public network access | The SQL endpoint is reachable from any IP (Entra sign-in is still required). | Restrict to known IPs, or use a private endpoint. |
 | ADX data connection uses IoT Hub shared access policy `adx-reader` | a key-based secret inside Azure | Managed-identity data connection. |
 | Lake storage account allows shared-key access (the default; not disabled in [`main.tf`](../infra/terraform/envs/dev/main.tf)) | an account key bypasses RBAC | `shared_access_key_enabled = false`, after checking that every consumer uses Entra. |

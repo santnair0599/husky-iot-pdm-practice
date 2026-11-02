@@ -2,7 +2,9 @@
 
 Each runbook follows the same pattern: **symptom → check → fix → prove it's fixed.** The commands use the Dev names. KQL runs in https://dataexplorer.azure.com against cluster `adxhuskypdmdev0599`, database `pdm_dev`.
 
-These procedures come from the real design and from problems hit while building Dev. Failure drills that rehearse them on purpose are planned but not done yet.
+For Test and Prod, swap in that environment's names: `…test…` / `pdm_test`, `…prod…` / `pdm_prod`, resource groups `rg-husky-pdm-test` / `rg-husky-pdm-prod`.
+
+These procedures come from the real design and from problems hit while building Dev, Test and Prod. Failure drills that rehearse them on purpose are planned but not done yet.
 
 | # | Runbook |
 |---|---|
@@ -14,6 +16,7 @@ These procedures come from the real design and from problems hit while building 
 | 6 | [Missing or expired permissions](#6-missing-or-expired-permissions) |
 | 7 | [Terraform deployment problems](#7-terraform-deployment-problems) |
 | 8 | [Synapse serverless query errors](#8-synapse-serverless-query-errors) |
+| 9 | [Cost control and clean-up](#9-cost-control-and-clean-up) |
 | — | [Open verification items](#open-verification-items) |
 
 The two Azure Monitor alerts in [`monitor.tf`](../infra/terraform/envs/dev/monitor.tf) say "Runbook: monitoring/runbooks/ingestion.md" and "…/export.md". Those paths don't exist. The real procedures are runbooks [2](#2-messages-not-arriving-in-bronze-ingestion-failure) and [4](#4-parquet-export-failing-or-synapse-data-stale) on this page. The alert descriptions should be updated in a future infrastructure change.
@@ -135,6 +138,12 @@ az role assignment list --scope "$storageId/blobServices/default/containers/cura
 ```
 The ADX cluster's identity must have `Storage Blob Data Contributor`. It's defined in [`adx_export.tf`](../infra/terraform/envs/dev/adx_export.tf).
 
+**Creating the export fails** with *"The managed identity 'system' … is not authorized to access the database"* (seen in Test runs `41340635265` and `41341166102`). The cluster's own identity needs **both**:
+1. the cluster policy: `.alter-merge cluster policy managed_identity` with `"ObjectId": "system"` and `"AllowedUsages": "AutomatedFlows"`
+2. **Viewer on the database**: `az kusto database-principal-assignment create … --principal-id <cluster identity client ID> --principal-type App --role Viewer`
+
+Both are admin-only. Prod's release **preflight** checks the Viewer role before deploying.
+
 **Fix:**
 - Missing role: run the approved Terraform workflow. The plan will show the role assignment being re-created.
 - Export disabled after repeated failures: `.enable continuous-export TelemetryHistoricalExport`
@@ -170,7 +179,10 @@ The ADX cluster's identity must have `Storage Blob Data Contributor`. It's defin
 | ADX "Principal … is not authorized" (Deploy KQL) | the deployer's database `Admin` was removed | Re-apply with the approved Terraform workflow (`azurerm_kusto_database_principal_assignment.deployer`). Check with `.show database pdm_dev principals`. |
 | `Cannot find the user 'sp-husky-pdm-dev'` (Synapse) | the user exists in `master` as a login but not in `HuskyPDMDev` | As Synapse admin, in `HuskyPDMDev`: `CREATE USER [sp-husky-pdm-dev] FROM LOGIN [sp-husky-pdm-dev];` then re-run the grants in [`00_grant_deployer.sql`](../synapse/00_grant_deployer.sql). |
 | `CREATE VIEW permission denied` / credential errors (Synapse) | one of the 6 grants is missing | Run the verify query at the end of [`00_grant_deployer.sql`](../synapse/00_grant_deployer.sql), expect 6 rows, and re-grant what's missing. |
-| `Unauthorized` (Send test telemetry) | the IMM-900 key was regenerated, or the secret holds a different device | Re-pipe the connection string into the secret ([`manual-grants.md`](../infra/manual-grants.md)). |
+| `Unauthorized` (Send test telemetry) | the IMM-900 key was regenerated, or the secret holds a different device | Reset the secret (next row's method). |
+| `Invalid Connection String - Invalid Key` (Send test telemetry) | the secret was damaged when it was piped (`\|`) into `gh secret set` in Windows PowerShell 5.1, which re-encodes piped text. Seen in Prod run `41436746679`. | Set it as an argument: `$cs = az iot hub device-identity connection-string show --hub-name <hub> --device-id IMM-900 --query connectionString -o tsv; gh secret set IOTHUB_DEVICE_CONNECTION_STRING -e <env> -b $cs; Remove-Variable cs`. `$cs.Length` should be about 128. |
+| Admin gets `Login failed … (18456)` on serverless SQL, or Studio says "you don't have access" | the workspace was **created by the pipeline**, so the deployer is the only Synapse Administrator. Being the Entra SQL admin alone wasn't enough. | Test: a one-time reviewed handover workflow granted the human Synapse Administrator (run `41338201298`), then the human removed the deployer's role. Prod avoids this: **the admin creates the workspace**. |
+| `ReachedPerSubscriptionWorkspaceLimit … Current maximum: 2` (creating Synapse) | subscription quota: 2 Synapse workspaces on Pay-As-You-Go | Request a quota increase, or retire a workspace **through a reviewed Terraform plan** ([test-synapse-retirement.md](test-synapse-retirement.md)), never by a manual delete. |
 
 OIDC tokens are short-lived and issued per job, so there are no client secrets to expire. A long job refreshes its login before the 30-minute Synapse wait ("Refresh Azure login").
 
@@ -195,6 +207,49 @@ OIDC tokens are short-lived and issued per job, so there are no client secrets t
 | "warming up" | the serverless pool is cold | Retry after about 30 s. |
 | `No results. Previous SQL was not a query` | an intermittent cold-start response with no result set | `query_synapse` retries this automatically, 3 times. If it keeps happening, check the pool's health in the portal. |
 | A view returns 0 rows | export not running (runbook 4), or the Synapse identity lost `Storage Blob Data Reader` on `curated` | Check both. |
+| `Content of directory on path 'telemetry/**' cannot be listed. (13807)` | in a **new environment** `curated/telemetry/` doesn't exist until the first continuous export | Expected until the first export. The export test waits on 13807 only (PR #5; proven in Prod run `41437359315`: "No Parquet folder yet; waiting" → passed). If it persists after an export, check runbook 4. |
+| The data source points at `https://<…>.dfs.core.windows.net/curated` | a placeholder in the bootstrap SQL wasn't replaced | `SELECT name, location FROM sys.external_data_sources;` then `DROP EXTERNAL DATA SOURCE HuskyCuratedLake;` and re-create it with the real account. |
+
+## 9. Cost control and clean-up
+
+**What bills, and when:**
+
+| Resource | Dev | Test | Prod | Billed while idle? |
+|---|---|---|---|---|
+| ADX Dev SKU (E2a v4), about $0.126/h | ✓ | ✓ | ✓ | compute: **only while Running**; storage: cents |
+| IoT Hub | F1 (free) | **B1, $10/month** | **B1, $10/month** | **yes**, B1 for as long as it exists |
+| Synapse serverless ($5/TB scanned) | ✓ | retired | ✓ | no |
+| Storage, Log Analytics (0.1 GB/day cap), alerts | ✓ | ✓ | ✓ | cents |
+
+**Rule: keep every ADX cluster stopped unless you're actively deploying or testing.** Each forgotten cluster costs about $3 a day.
+
+**Start, check, stop:**
+```powershell
+az kusto cluster start --name <adxhuskypdmdev0599|adxhuskypdmtest0599|adxhuskypdmprod0599> --resource-group <rg-husky-pdm-dev|-test|-prod>
+az kusto cluster show  --name <cluster> --resource-group <rg> --query state -o tsv     # Running / Stopped / Starting / Stopping
+az kusto cluster stop  --name <cluster> --resource-group <rg>
+```
+**Check all three at once:**
+```powershell
+foreach ($e in "dev","test","prod") { "{0}: {1}" -f $e, (az kusto cluster show -n "adxhuskypdm$($e)0599" -g "rg-husky-pdm-$e" --query state -o tsv) }
+```
+Workflows that need ADX check it first and fail clearly if it's stopped ("ADX cluster is Stopped. Start it before running this workflow."). Start the cluster, re-run, then stop it.
+
+**Temporary firewall rules:** admins open Synapse to their own IP only while working (`admin-<date>`), and remove the rule afterwards. Release workflows add and **always** remove their own `gh-run-…` rule. Check that nothing is left open:
+```powershell
+az synapse workspace firewall-rule list --workspace-name <workspace> --resource-group <rg> --query "[].name" -o tsv
+```
+
+**Clean-up.** These are admin-only; the workflows block deletes by design:
+- **One component** (example: Test Synapse): change the configuration so Terraform plans *only* those deletions, save the plan, review it, apply it locally, then confirm a pipeline run shows "No changes". See [test-synapse-retirement.md](test-synapse-retirement.md).
+- **A whole environment:** follow [prod-environment.md § Clean-up](prod-environment.md#clean-up-admin-only-not-through-the-workflow):
+  1. save the evidence
+  2. `terraform state rm` the `prevent_destroy` database
+  3. review a `plan -destroy`
+  4. apply it
+  5. delete any admin-created Synapse workspace
+  6. remove the identity, roles, custom role, resource group, GitHub environments and state blob
+- **Never delete resources by hand** while Terraform still manages them. The state would drift, and the next plan would try to re-create them.
 
 ## Open verification items
 

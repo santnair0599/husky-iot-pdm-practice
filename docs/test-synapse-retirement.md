@@ -1,6 +1,13 @@
 # Test Synapse retirement (Lesson 18C, Option B)
 
-> **Status: prepared, NOT executed.** Nothing on this page has been deleted. The admin runs the commands below only after approving the deletion scope.
+> **Status (2026-11-02): EXECUTED.**
+> - The admin reviewed a saved plan showing exactly `0 to add, 0 to change, 3 to destroy` (workspace `syn-husky-pdm-test-0599` + its 2 storage roles). The saved file was also checked programmatically: 3 deletes, all inside `rg-husky-pdm-test`, nothing in Dev or Prod, `pdm_test` untouched.
+> - **`Apply complete! Resources: 0 added, 0 changed, 3 destroyed.`**
+> - `TF_SYNAPSE_MODE=none` set on `test`. Run **`41428063618`**: *"No changes: approval and apply will be skipped."*
+> - Afterwards only `syn-husky-pdm-dev-0599` remained, which freed the slot. Prod's workspace `syn-husky-pdm-prod-0599` was then created (A6).
+> - Logs were saved to `C:\dev\azure\husky-evidence\test\` beforehand.
+>
+> Sections 3 and 4 below are the procedure as it was approved and run.
 
 **Why:** the subscription allows **2 Synapse workspaces** (Pay-As-You-Go: `ReachedPerSubscriptionWorkspaceLimit … Current maximum: 2`). Dev and Test hold both, so Prod's admin-created workspace (step A6 in [prod-environment.md](prod-environment.md)) can't be created.
 
