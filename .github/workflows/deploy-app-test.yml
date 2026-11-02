@@ -154,10 +154,12 @@ jobs:
         if: inputs.scope != 'kql-only'
         run: python scripts/deploy_synapse.py
 
-      - name: Verify Synapse views
+      # Only "views exist" here: a new environment's lake is empty until the
+      # first test message is exported, so the lake read runs after that (below).
+      - name: Verify Synapse views exist
         if: inputs.scope != 'kql-only'
-        run: python -m pytest tests/integration/test_synapse_deployed.py -v
-        
+        run: python -m pytest tests/integration/test_synapse_deployed.py -v -k test_views_exist
+
 
       # ---------- Integration tests against the deployed Dev platform ----------
 
@@ -216,6 +218,11 @@ jobs:
           TEST_MESSAGE_ID: ${{ steps.send.outputs.message_id }}
         if: inputs.scope == 'full'
         run: python -m pytest tests/integration/test_synapse_reporting.py -v -s
+
+      # By now the export has written Parquet, so the views must return rows
+      - name: Verify Synapse views read the lake
+        if: inputs.scope == 'full'
+        run: python -m pytest tests/integration/test_synapse_deployed.py -v -k test_views_read_the_lake
 
       - name: Close Synapse firewall
         if: always() && inputs.scope != 'kql-only'
