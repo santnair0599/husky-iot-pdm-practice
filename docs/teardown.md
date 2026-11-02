@@ -1,6 +1,6 @@
 # Teardown: retiring the Husky Azure lab
 
-> **Status (2026-11-02): IN PROGRESS.** **Prod is torn down**; see the [execution log](#8-execution-log). Test and Dev are not yet: each environment's final saved destroy plan needs explicit approval before it's applied.
+> **Status (2026-11-02): COMPLETE.** All Husky Azure infrastructure, identities, GitHub environments and the state backend have been removed. The repository, tags, docs and saved evidence are kept. See the [execution log](#8-execution-log).
 
 The goal is to stop all Azure charges while **keeping** the GitHub repository, documentation, release tags (`test-passed-2026-11-02` → `86fad6d`, `prod-release-2026-11-02-1` → `a470b89`), the release-file hashes ([test-synapse-retirement.md](test-synapse-retirement.md#release-file-hashes-at-test-passed-2026-11-02)) and the run evidence.
 
@@ -179,3 +179,32 @@ Log Analytics workspaces are **soft-deleted for 14 days**. That costs nothing, b
 - **Kept for the final clean-up:** app `sp-husky-pdm-prod`, its Blob Data Contributor on `tfstate-prod`, `husky-prod.tfstate` (empty), and GitHub `prod` / `prod-approval`.
 
 **Cost:** nothing in Prod bills any more. The ADX cluster and the $10/month IoT Hub B1 are both gone.
+
+### Test, Dev, identities and backend (2026-11-02): simplified teardown, complete
+
+The owner switched to a **simplified teardown**: Husky is a disposable practice project. No more Terraform destroy runs: Husky resource groups were deleted directly, and the now-stale state was retired (archived with credentials removed, then deleted).
+
+| Time (UTC) | Action | Result |
+|---|---|---|
+| ≈14:30 | safety checks: subscription `1b0f0a4d-…`; `rg-husky-pdm-dev`, `rg-husky-pdm-test` and `rg-husky-pdm-tfstate` contain only Husky resources; **no locks**; no Husky-named resources elsewhere; `NetworkWatcherRG` (Azure automatic) excluded | ✅ |
+| ≈14:35 | Terraform state archived with credentials removed (dev serial 38, test 17, prod 22 (empty), bootstrap 10) in `C:\dev\azure\husky-evidence\state\`; 0 keys found by two scans | ✅ |
+| 14:37 | `az group delete --yes --no-wait`: `rg-husky-pdm-test`, `rg-husky-pdm-dev` | both gone, with Dev's Synapse-managed resource group; 0 failed deletions in the activity log |
+| ≈14:38 | GitHub environments `dev`, `dev-approval`, `test`, `test-approval`, `prod`, `prod-approval` deleted, with their variables and secrets | workflows (7), tags (2) and run history kept |
+| ≈14:41 | orphaned custom role `Husky PDM Deployer (test)` deleted, after its assignments went with the resource group | 0 Husky custom roles |
+| ≈14:42 | deployer state-container roles removed; apps `sp-husky-pdm-dev`, `-test`, `-prod` deleted (with their service principals and federated credentials); user `pbi-analyst` deleted (no roles, no groups) | 0 Husky apps, service principals or role assignments; recoverable from Entra's recycle bin for 30 days |
+| 14:43–14:45 | state backend `rg-husky-pdm-tfstate` / `sthpdm5mljzdg5` (only `tfstate-*` containers) deleted | gone 14:45:02 |
+| ≈14:50 | local git-ignored state and plan files retired (8 archived with credentials removed, then all 10 deleted) | see the note below |
+
+**Not archived:** two old local Dev state files, `envs/dev/dev-state-backup.tfstate` (UTF-16 encoded) and `envs/dev/terraform.tfstate`. They couldn't be parsed and were deleted along with the rest. Both predate Dev's move to remote state on 2026-10-20. Dev's authoritative final state (remote, serial 38) is archived.
+
+**Final check (subscription-wide):**
+- the only resource group left is `NetworkWatcherRG` (3 network watchers, Azure automatic, not Husky)
+- 0 ADX clusters, 0 IoT hubs, 0 Synapse workspaces, 0 storage accounts, 0 active Log Analytics workspaces, 0 metric alerts, 0 action groups
+- 0 custom roles, and 0 role assignments on Husky scopes
+- the 3 subscription-level role assignments are untouched
+
+**Billing:** nothing Husky bills any more. The 3 Log Analytics workspaces are **soft-deleted** (free, recoverable for 14 days, then purged automatically).
+
+**Kept:** the GitHub repository, source code, workflows, docs, tags `test-passed-2026-11-02` and `prod-release-2026-11-02-1`, the Actions run history, and `C:\dev\azure\husky-evidence\` (19 run logs + redacted state).
+
+**Rebuilding later** needs everything from scratch: the state backend (`infra/bootstrap`), identities and roles (`infra/roles`, or `infra/bootstrap-env`), GitHub environments, and then the Dev, Test and Prod procedures in this repo. Don't run Terraform against the old state names; that state no longer exists.
