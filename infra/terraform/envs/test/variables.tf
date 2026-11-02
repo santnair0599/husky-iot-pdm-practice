@@ -105,3 +105,14 @@ variable "alert_email" {
   type      = string
   sensitive = true
 }
+
+variable "synapse_mode" {
+  description = "create while Test has its own Synapse; none after the Test workspace is retired (subscription limit: 2 Synapse workspaces)"
+  type        = string
+  default     = "create"
+
+  validation {
+    condition     = contains(["create", "none"], var.synapse_mode)
+    error_message = "Test uses create, or none once its Synapse workspace is retired."
+  }
+}
