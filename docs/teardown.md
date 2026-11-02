@@ -1,6 +1,6 @@
 # Teardown: retiring the Husky Azure lab
 
-> **Status (2026-11-02): PREPARED, NOT EXECUTED.** Nothing has been deleted. Each environment's saved destroy plan needs explicit approval before it's applied.
+> **Status (2026-11-02): IN PROGRESS.** **Prod is torn down**; see the [execution log](#8-execution-log). Test and Dev are not yet: each environment's final saved destroy plan needs explicit approval before it's applied.
 
 The goal is to stop all Azure charges while **keeping** the GitHub repository, documentation, release tags (`test-passed-2026-11-02` → `86fad6d`, `prod-release-2026-11-02-1` → `a470b89`), the release-file hashes ([test-synapse-retirement.md](test-synapse-retirement.md#release-file-hashes-at-test-passed-2026-11-02)) and the run evidence.
 
@@ -159,3 +159,23 @@ Log Analytics workspaces are **soft-deleted for 14 days**. That costs nothing, b
 - **The plans used `-refresh=false`.** They delete exactly what the state records. A resource already deleted by hand makes that step fail with "not found", which is harmless; re-plan and continue.
 - **The teardown copy lives in the session scratchpad.** If it's gone, rebuild it: copy `infra/terraform/{modules,envs}`, switch `prevent_destroy` off in that copy only, `terraform init` with `-backend-config` for the environment, then `terraform plan -destroy -lock=false -refresh=false -out=…`. Review it again.
 - **Not touched:** `NetworkWatcherRG`, anything outside the Husky resource groups, the repository, tags, docs and Actions history.
+
+## 8. Execution log
+
+### Prod (2026-11-02): complete, except the identity and GitHub items kept for the final clean-up
+
+| Time (UTC) | Action | By | Evidence |
+|---|---|---|---|
+| before 13:00 | evidence saved: 19 run logs (Test 7, Prod 7, Dev 5) in `C:\dev\azure\husky-evidence\`, no keys in any | admin | file count and key scan |
+| ≈12:55–13:02 | **Terraform destroy of Prod**: final plan regenerated against live Azure (refresh on, state lock, Prod ADX running), approved by full SHA-256 `be0bc256cd98b23dd181fc6324822f5220958f972b9c8a09a058ab7f8b865d7c`, hash re-checked immediately before apply | admin (local, saved plan) | `Apply complete! Resources: 0 added, 0 changed, 23 destroyed.`; Prod state now empty (1,855 bytes); only the admin-created Synapse workspace left in the resource group |
+| 13:09–13:10 | admin-created Synapse workspace `syn-husky-pdm-prod-0599` deleted (serverless `HuskyPDMProd` with it) | admin | activity log `Microsoft.Synapse/workspaces/delete` Succeeded 13:10:22; managed resource group `…-23da3fb3-…` then gone |
+| 13:54:05 / 13:54:07 | role assignments `5680ad58-145a-42c1-98fa-94215de47989` (Husky PDM Deployer (prod)) and `13ecb69b-37b2-4dde-bc15-da3e6c21be4f` (RBAC Administrator, with condition) for `sp-husky-pdm-prod` (`29d54faa…`) deleted | admin | activity log `roleAssignments/delete` Succeeded |
+| 13:54:15 | custom role `Husky PDM Deployer (prod)` (`e9cf88bc-9372-4efd-917f-a9a8d45c7639`) deleted; it had 0 assignments | admin | activity log `roleDefinitions/delete` Succeeded |
+| 13:54:39 | empty resource group `rg-husky-pdm-prod` deleted | admin | activity log `resourcegroups/delete` Succeeded; `az group exists` → `false` |
+
+**Checks after Prod:**
+- Dev: 8 resources; Test: 7 resources. Their state files are unchanged (`husky-dev.tfstate` 70,952 bytes, last modified 2026-11-01T08:13:07Z; `husky-test.tfstate` 61,727 bytes, 2026-11-02T10:22:22Z).
+- The built-in RBAC Administrator role and the 3 subscription-level role assignments are untouched.
+- **Kept for the final clean-up:** app `sp-husky-pdm-prod`, its Blob Data Contributor on `tfstate-prod`, `husky-prod.tfstate` (empty), and GitHub `prod` / `prod-approval`.
+
+**Cost:** nothing in Prod bills any more. The ADX cluster and the $10/month IoT Hub B1 are both gone.
